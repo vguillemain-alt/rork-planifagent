@@ -1,0 +1,21 @@
+{
+  "name": "PlanifAgent",
+  "short_name": "PlanifAgent",
+  "lang": "fr",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F1F5F9",
+  "theme_color": "#1E293B",
+  "icons": [
+    {
+      "src": "/assets/images/icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/images/adaptive-icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -25,7 +25,9 @@
       "package": "app.rork.planifagent"
     },
     "web": {
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "themeColor": "#1E293B",
+      "backgroundColor": "#F1F5F9"
     },
     "plugins": [
       [
@@ -35,7 +37,14 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#1E293B"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

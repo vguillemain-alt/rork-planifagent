@@ -1,9 +1,17 @@
 import { Tabs } from 'expo-router';
 import { Calendar, ListTodo } from 'lucide-react-native';
-import React from 'react';
+import React, { useEffect } from 'react';
 import Colors from '@/constants/colors';
+import { usePlanning } from '@/contexts/PlanningContext';
+import { syncWebNotificationBadge } from '@/utils/notifications';
 
 export default function TabLayout() {
+  const { unseenChanges } = usePlanning();
+
+  useEffect(() => {
+    syncWebNotificationBadge(unseenChanges);
+  }, [unseenChanges]);
+
   return (
     <Tabs
       screenOptions={{
@@ -14,9 +22,12 @@ export default function TabLayout() {
           backgroundColor: Colors.surface,
           borderTopColor: Colors.border,
         },
+        tabBarItemStyle: {
+          paddingHorizontal: 2,
+        },
         tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600' as const,
+          fontSize: 10,
+          fontWeight: '700' as const,
         },
       }}
     >
@@ -24,6 +35,13 @@ export default function TabLayout() {
         name="(planning)"
         options={{
           title: 'Planning',
+          tabBarBadge: unseenChanges > 0 ? unseenChanges : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: Colors.danger,
+            color: '#FFFFFF',
+            fontSize: 10,
+            fontWeight: '700' as const,
+          },
           tabBarIcon: ({ color, size }) => <Calendar size={size} color={color} />,
         }}
       />

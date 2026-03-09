@@ -1,13 +1,24 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
+import * as Notifications from 'expo-notifications';
 import { ScheduledTask, PendingTask, ChangeLogEntry } from '@/types/planning';
 import { generateId } from '@/utils/time';
+import { configureNotificationsAsync, notifyPlanningChangeAsync } from '@/utils/notifications';
 
 const TASKS_KEY = 'planning_tasks';
 const PENDING_KEY = 'pending_tasks';
 const CHANGELOG_KEY = 'change_log';
 const LAST_SEEN_KEY = 'last_seen_change';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 export const [PlanningProvider, usePlanning] = createContextHook(() => {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -15,6 +26,8 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
   const [changeLog, setChangeLog] = useState<ChangeLogEntry[]>([]);
   const [lastSeenTimestamp, setLastSeenTimestamp] = useState<string>('');
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
+  const hasBootstrappedNotificationsRef = useRef<boolean>(false);
+  const lastNotifiedChangeIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -25,18 +38,60 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
           AsyncStorage.getItem(CHANGELOG_KEY),
           AsyncStorage.getItem(LAST_SEEN_KEY),
         ]);
-        if (tasksData) setTasks(JSON.parse(tasksData));
-        if (pendingData) setPendingTasks(JSON.parse(pendingData));
-        if (logData) setChangeLog(JSON.parse(logData));
-        if (lastSeen) setLastSeenTimestamp(lastSeen);
-      } catch (e) {
-        console.log('Error loading planning data:', e);
+
+        if (tasksData) {
+          setTasks(JSON.parse(tasksData) as ScheduledTask[]);
+        }
+
+        if (pendingData) {
+          setPendingTasks(JSON.parse(pendingData) as PendingTask[]);
+        }
+
+        if (logData) {
+          setChangeLog(JSON.parse(logData) as ChangeLogEntry[]);
+        }
+
+        if (lastSeen) {
+          setLastSeenTimestamp(lastSeen);
+        }
+      } catch (error) {
+        console.log('Error loading planning data:', error);
       } finally {
         setIsLoaded(true);
       }
     };
-    load();
+
+    void load();
   }, []);
+
+  useEffect(() => {
+    void configureNotificationsAsync().catch((error: unknown) => {
+      console.log('Error during notification configuration:', error);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      return;
+    }
+
+    const latestEntry = changeLog[0] ?? null;
+
+    if (!hasBootstrappedNotificationsRef.current) {
+      hasBootstrappedNotificationsRef.current = true;
+      lastNotifiedChangeIdRef.current = latestEntry?.id ?? null;
+      return;
+    }
+
+    if (!latestEntry || latestEntry.id === lastNotifiedChangeIdRef.current) {
+      return;
+    }
+
+    lastNotifiedChangeIdRef.current = latestEntry.id;
+    notifyPlanningChangeAsync(latestEntry).catch((error: unknown) => {
+      console.log('Error while sending planning notification:', error);
+    });
+  }, [changeLog, isLoaded]);
 
   const persistTasks = useCallback(async (updated: ScheduledTask[]) => {
     setTasks(updated);
@@ -56,6 +111,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
       taskTitle,
       description,
     };
+
     const updated = [entry, ...changeLog].slice(0, 50);
     setChangeLog(updated);
     await AsyncStorage.setItem(CHANGELOG_KEY, JSON.stringify(updated));
@@ -65,25 +121,25 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     const newTask: ScheduledTask = { ...task, id: generateId() };
     const updated = [...tasks, newTask];
     await persistTasks(updated);
-    await addChangeLog('add', task.title, `Ajouté le ${task.title} (${task.weekKey})`);
+    await addChangeLog('add', task.title, `Ajouté : ${task.title}`);
     return newTask;
   }, [tasks, persistTasks, addChangeLog]);
 
   const updateTask = useCallback(async (taskId: string, updates: Partial<ScheduledTask>) => {
-    const updated = tasks.map(t => t.id === taskId ? { ...t, ...updates } : t);
+    const updated = tasks.map((task) => (task.id === taskId ? { ...task, ...updates } : task));
     await persistTasks(updated);
-    const task = updated.find(t => t.id === taskId);
+    const task = updated.find((item) => item.id === taskId);
     if (task) {
-      await addChangeLog('edit', task.title, `Modifié: ${task.title}`);
+      await addChangeLog('edit', task.title, `Modifié : ${task.title}`);
     }
   }, [tasks, persistTasks, addChangeLog]);
 
   const deleteTask = useCallback(async (taskId: string) => {
-    const task = tasks.find(t => t.id === taskId);
-    const updated = tasks.filter(t => t.id !== taskId);
+    const task = tasks.find((item) => item.id === taskId);
+    const updated = tasks.filter((item) => item.id !== taskId);
     await persistTasks(updated);
     if (task) {
-      await addChangeLog('delete', task.title, `Supprimé: ${task.title}`);
+      await addChangeLog('delete', task.title, `Supprimé : ${task.title}`);
     }
   }, [tasks, persistTasks, addChangeLog]);
 
@@ -99,7 +155,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
   }, [pendingTasks, persistPending]);
 
   const deletePendingTask = useCallback(async (taskId: string) => {
-    const updated = pendingTasks.filter(t => t.id !== taskId);
+    const updated = pendingTasks.filter((task) => task.id !== taskId);
     await persistPending(updated);
   }, [pendingTasks, persistPending]);
 
@@ -107,8 +163,10 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     pendingId: string,
     schedule: { weekKey: string; dayIndex: number; startHour: number; startMinute: number; endHour: number; endMinute: number }
   ) => {
-    const pending = pendingTasks.find(t => t.id === pendingId);
-    if (!pending) return;
+    const pending = pendingTasks.find((task) => task.id === pendingId);
+    if (!pending) {
+      return;
+    }
 
     const newTask: ScheduledTask = {
       id: generateId(),
@@ -125,31 +183,34 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     };
 
     const updatedTasks = [...tasks, newTask];
-    const updatedPending = pendingTasks.filter(t => t.id !== pendingId);
+    const updatedPending = pendingTasks.filter((task) => task.id !== pendingId);
 
     await persistTasks(updatedTasks);
     await persistPending(updatedPending);
-    await addChangeLog('add', pending.title, `Planifié depuis liste d'attente: ${pending.title}`);
+    await addChangeLog('add', pending.title, `Planifié depuis l'attente : ${pending.title}`);
   }, [tasks, pendingTasks, persistTasks, persistPending, addChangeLog]);
 
   const unscheduleTask = useCallback(async (taskId: string) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) {
+      return;
+    }
 
+    const fallbackEstimatedMinutes = (task.endHour * 60 + task.endMinute) - (task.startHour * 60 + task.startMinute);
     const newPending: PendingTask = {
       id: generateId(),
       title: task.title,
       site: task.site,
-      estimatedMinutes: task.pendingEstimatedMinutes ?? ((task.endHour * 60 + task.endMinute) - (task.startHour * 60 + task.startMinute)),
+      estimatedMinutes: task.pendingEstimatedMinutes ?? fallbackEstimatedMinutes,
       createdAt: new Date().toISOString(),
     };
 
-    const updatedTasks = tasks.filter(t => t.id !== taskId);
+    const updatedTasks = tasks.filter((item) => item.id !== taskId);
     const updatedPending = [...pendingTasks, newPending];
 
     await persistTasks(updatedTasks);
     await persistPending(updatedPending);
-    await addChangeLog('delete', task.title, `Renvoyé en attente: ${task.title}`);
+    await addChangeLog('delete', task.title, `Renvoyé en attente : ${task.title}`);
   }, [tasks, pendingTasks, persistTasks, persistPending, addChangeLog]);
 
   const moveTask = useCallback(async (
@@ -158,66 +219,80 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     newDayIndex: number,
     newStartMinutes: number
   ) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) {
+      return;
+    }
 
     const duration = (task.endHour * 60 + task.endMinute) - (task.startHour * 60 + task.startMinute);
     const newEndMinutes = newStartMinutes + duration;
 
     const dayTasks = tasks.filter(
-      t => t.weekKey === newWeekKey && t.dayIndex === newDayIndex && t.id !== taskId
+      (item) => item.weekKey === newWeekKey && item.dayIndex === newDayIndex && item.id !== taskId
     );
 
-    const virtual = dayTasks.map(t => ({
-      id: t.id,
-      start: t.startHour * 60 + t.startMinute,
-      end: t.endHour * 60 + t.endMinute,
+    const virtual = dayTasks.map((item) => ({
+      id: item.id,
+      start: item.startHour * 60 + item.startMinute,
+      end: item.endHour * 60 + item.endMinute,
     }));
 
     virtual.push({ id: taskId, start: newStartMinutes, end: newEndMinutes });
     virtual.sort((a, b) => {
-      if (a.start !== b.start) return a.start - b.start;
+      if (a.start !== b.start) {
+        return a.start - b.start;
+      }
+
       return a.id === taskId ? -1 : 1;
     });
 
-    for (let i = 1; i < virtual.length; i++) {
-      if (virtual[i].start < virtual[i - 1].end) {
-        const dur = virtual[i].end - virtual[i].start;
-        virtual[i].start = virtual[i - 1].end;
-        virtual[i].end = virtual[i].start + dur;
+    for (let index = 1; index < virtual.length; index += 1) {
+      if (virtual[index].start < virtual[index - 1].end) {
+        const currentDuration = virtual[index].end - virtual[index].start;
+        virtual[index].start = virtual[index - 1].end;
+        virtual[index].end = virtual[index].start + currentDuration;
       }
     }
 
-    const updates: Record<string, { startHour: number; startMinute: number; endHour: number; endMinute: number; weekKey: string; dayIndex: number }> = {};
-    for (const v of virtual) {
-      updates[v.id] = {
-        startHour: Math.floor(v.start / 60),
-        startMinute: v.start % 60,
-        endHour: Math.floor(v.end / 60),
-        endMinute: v.end % 60,
+    const updates: Record<string, {
+      startHour: number;
+      startMinute: number;
+      endHour: number;
+      endMinute: number;
+      weekKey: string;
+      dayIndex: number;
+    }> = {};
+
+    for (const entry of virtual) {
+      updates[entry.id] = {
+        startHour: Math.floor(entry.start / 60),
+        startMinute: entry.start % 60,
+        endHour: Math.floor(entry.end / 60),
+        endMinute: entry.end % 60,
         weekKey: newWeekKey,
         dayIndex: newDayIndex,
       };
     }
 
-    const updatedTasks = tasks.map(t => {
-      if (updates[t.id]) {
-        return { ...t, ...updates[t.id] };
-      }
-      return t;
+    const updatedTasks = tasks.map((item) => {
+      const nextValue = updates[item.id];
+      return nextValue ? { ...item, ...nextValue } : item;
     });
 
     await persistTasks(updatedTasks);
-    await addChangeLog('move', task.title, `Déplacé: ${task.title}`);
+    await addChangeLog('move', task.title, `Déplacé : ${task.title}`);
   }, [tasks, persistTasks, addChangeLog]);
 
   const getTasksForWeek = useCallback((weekKey: string): ScheduledTask[] => {
-    return tasks.filter(t => t.weekKey === weekKey);
+    return tasks.filter((task) => task.weekKey === weekKey);
   }, [tasks]);
 
   const unseenChanges = useMemo(() => {
-    if (!lastSeenTimestamp) return changeLog.length;
-    return changeLog.filter(c => c.timestamp > lastSeenTimestamp).length;
+    if (!lastSeenTimestamp) {
+      return changeLog.length;
+    }
+
+    return changeLog.filter((entry) => entry.timestamp > lastSeenTimestamp).length;
   }, [changeLog, lastSeenTimestamp]);
 
   const markChangesSeen = useCallback(async () => {
@@ -226,7 +301,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     await AsyncStorage.setItem(LAST_SEEN_KEY, now);
   }, []);
 
-  return {
+  return useMemo(() => ({
     tasks,
     pendingTasks,
     changeLog,
@@ -242,5 +317,21 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     moveTask,
     getTasksForWeek,
     markChangesSeen,
-  };
+  }), [
+    tasks,
+    pendingTasks,
+    changeLog,
+    isLoaded,
+    unseenChanges,
+    addTask,
+    updateTask,
+    deleteTask,
+    addPendingTask,
+    deletePendingTask,
+    schedulePendingTask,
+    unscheduleTask,
+    moveTask,
+    getTasksForWeek,
+    markChangesSeen,
+  ]);
 });

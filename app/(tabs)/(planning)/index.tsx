@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,14 +7,14 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
-  Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronLeft, ChevronRight, Lock, Unlock, Clock, X as XIcon, Move, Share2 } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Lock, Unlock, Clock, X as XIcon, Move, BellDot, ChartColumnBig } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
-import { SITES } from '@/constants/sites';
+import { SITES, SITE_KEYS } from '@/constants/sites';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePlanning } from '@/contexts/PlanningContext';
 import {
@@ -23,17 +23,27 @@ import {
   getWeekNumber,
   getWeekDates,
   END_HOUR,
+  taskDurationMinutes,
 } from '@/utils/time';
 import { ScheduledTask, PendingTask } from '@/types/planning';
 import WeekGrid from '@/components/WeekGrid';
 import ChangeLogBanner from '@/components/ChangeLogBanner';
 import TaskDetailModal from '@/components/TaskDetailModal';
 
+interface SiteHoursSummary {
+  siteKey: (typeof SITE_KEYS)[number];
+  label: string;
+  color: string;
+  hours: number;
+}
+
 export default function PlanningScreen() {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const { isAdmin, logout, isLoading: authLoading } = useAuth();
   const {
+    tasks: allTasks,
     getTasksForWeek,
     isLoaded,
     pendingTasks,
@@ -42,6 +52,7 @@ export default function PlanningScreen() {
     deleteTask,
     unscheduleTask,
     moveTask,
+    unseenChanges,
   } = usePlanning();
   const [weekKey, setWeekKey] = useState<string>(getCurrentWeekKey());
   const [selectedPending, setSelectedPending] = useState<PendingTask | null>(null);
@@ -49,24 +60,56 @@ export default function PlanningScreen() {
   const [detailTask, setDetailTask] = useState<ScheduledTask | null>(null);
   const [detailDayDate, setDetailDayDate] = useState<Date | null>(null);
   const [showDetailModal, setShowDetailModal] = useState<boolean>(false);
-  const gridRef = useRef<View>(null);
 
   const weekNumber = getWeekNumber(weekKey);
   const dates = useMemo(() => getWeekDates(weekKey), [weekKey]);
   const tasks = useMemo(() => getTasksForWeek(weekKey), [getTasksForWeek, weekKey]);
-
   const firstDate = dates[0];
   const lastDate = dates[4];
+  const isCompactHeader = width < 390;
 
-  const formatDate = (d: Date) =>
-    `${d.getDate()} ${d.toLocaleDateString('fr-FR', { month: 'short' })}`;
+  const formatDate = (date: Date): string => {
+    return `${date.getDate()} ${date.toLocaleDateString('fr-FR', { month: 'short' })}`;
+  };
+
+  const monthLabel = useMemo(() => {
+    return firstDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  }, [firstDate]);
+
+  const monthlyHoursBySite = useMemo<SiteHoursSummary[]>(() => {
+    const month = firstDate.getMonth();
+    const year = firstDate.getFullYear();
+    const totals = SITE_KEYS.reduce<Record<string, number>>((accumulator, key) => {
+      accumulator[key] = 0;
+      return accumulator;
+    }, {});
+
+    for (const task of allTasks) {
+      const weekDates = getWeekDates(task.weekKey);
+      const taskDate = weekDates[task.dayIndex];
+      if (!taskDate) {
+        continue;
+      }
+      if (taskDate.getMonth() !== month || taskDate.getFullYear() !== year) {
+        continue;
+      }
+      totals[task.site] += taskDurationMinutes(task) / 60;
+    }
+
+    return SITE_KEYS.map((siteKey) => ({
+      siteKey,
+      label: SITES[siteKey].label,
+      color: SITES[siteKey].color,
+      hours: totals[siteKey] ?? 0,
+    }));
+  }, [allTasks, firstDate]);
 
   const handlePrevWeek = useCallback(() => {
-    setWeekKey((prev) => navigateWeek(prev, -1));
+    setWeekKey((previous) => navigateWeek(previous, -1));
   }, []);
 
   const handleNextWeek = useCallback(() => {
-    setWeekKey((prev) => navigateWeek(prev, 1));
+    setWeekKey((previous) => navigateWeek(previous, 1));
   }, []);
 
   const handleAuthPress = useCallback(() => {
@@ -79,13 +122,14 @@ export default function PlanningScreen() {
           { text: 'Déconnexion', style: 'destructive', onPress: logout },
         ]
       );
-    } else {
-      router.push('/login');
+      return;
     }
+
+    router.push('/login');
   }, [isAdmin, logout, router]);
 
   const handleSelectPending = useCallback((task: PendingTask) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSelectedPending(task);
     setMovingTask(null);
   }, []);
@@ -99,8 +143,10 @@ export default function PlanningScreen() {
   }, []);
 
   const handleTaskLongPress = useCallback((task: ScheduledTask) => {
-    if (!isAdmin) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    if (!isAdmin) {
+      return;
+    }
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setMovingTask(task);
     setSelectedPending(null);
   }, [isAdmin]);
@@ -108,8 +154,8 @@ export default function PlanningScreen() {
   const handleSlotPress = useCallback((dayIndex: number, startHour: number, startMinute: number) => {
     if (movingTask) {
       const startMinutes = startHour * 60 + startMinute;
-      moveTask(movingTask.id, weekKey, dayIndex, startMinutes);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      void moveTask(movingTask.id, weekKey, dayIndex, startMinutes);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setMovingTask(null);
       return;
     }
@@ -118,20 +164,23 @@ export default function PlanningScreen() {
       const totalStart = startHour * 60 + startMinute;
       const totalEnd = totalStart + selectedPending.estimatedMinutes;
       const roundedEnd = Math.ceil(totalEnd / 30) * 30;
-      const endHour = Math.min(Math.floor(roundedEnd / 60), END_HOUR);
-      const endMinute = roundedEnd % 60;
+      const computedEndHour = Math.min(Math.floor(roundedEnd / 60), END_HOUR);
+      const computedEndMinute = roundedEnd % 60;
 
-      schedulePendingTask(selectedPending.id, {
+      void schedulePendingTask(selectedPending.id, {
         weekKey,
         dayIndex,
         startHour,
         startMinute,
-        endHour: endHour > END_HOUR ? END_HOUR : endHour,
-        endMinute: endHour >= END_HOUR ? 0 : endMinute,
+        endHour: computedEndHour > END_HOUR ? END_HOUR : computedEndHour,
+        endMinute: computedEndHour >= END_HOUR ? 0 : computedEndMinute,
       });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSelectedPending(null);
-    } else if (isAdmin) {
+      return;
+    }
+
+    if (isAdmin) {
       router.push({
         pathname: '/task-form',
         params: {
@@ -176,7 +225,9 @@ export default function PlanningScreen() {
         {
           text: 'Supprimer',
           style: 'destructive',
-          onPress: () => deleteTask(taskId),
+          onPress: () => {
+            void deleteTask(taskId);
+          },
         },
       ]
     );
@@ -190,53 +241,17 @@ export default function PlanningScreen() {
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Renvoyer',
-          onPress: () => unscheduleTask(taskId),
+          onPress: () => {
+            void unscheduleTask(taskId);
+          },
         },
       ]
     );
   }, [unscheduleTask]);
 
   const handleSaveComment = useCallback((taskId: string, comment: string) => {
-    updateTask(taskId, { comment });
+    void updateTask(taskId, { comment });
   }, [updateTask]);
-
-  const handleSharePlanning = useCallback(async () => {
-    try {
-      if (Platform.OS === 'web') {
-        Alert.alert('Info', 'Le partage par SMS est disponible uniquement sur mobile.');
-        return;
-      }
-
-      const viewShot = await import('react-native-view-shot');
-      const sharing = await import('expo-sharing');
-
-      if (!gridRef.current) {
-        Alert.alert('Erreur', 'Impossible de capturer le planning.');
-        return;
-      }
-
-      const uri = await viewShot.captureRef(gridRef.current, {
-        format: 'jpg',
-        quality: 0.95,
-        result: 'tmpfile',
-      });
-
-      console.log('Captured planning at:', uri);
-
-      const isAvailable = await sharing.isAvailableAsync();
-      if (isAvailable) {
-        await sharing.shareAsync(uri, {
-          mimeType: 'image/jpeg',
-          dialogTitle: `Planning S${weekNumber}`,
-        });
-      } else {
-        Alert.alert('Erreur', 'Le partage n\'est pas disponible sur cet appareil.');
-      }
-    } catch (error) {
-      console.log('Error sharing planning:', error);
-      Alert.alert('Erreur', 'Impossible de partager le planning.');
-    }
-  }, [weekNumber]);
 
   if (!isLoaded || authLoading) {
     return (
@@ -248,43 +263,43 @@ export default function PlanningScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-        <View style={styles.headerTop}>
-          <Text style={styles.headerTitle}>PLANNING</Text>
-          <View style={styles.headerRight}>
-            {isAdmin && (
-              <Pressable onPress={handleSharePlanning} style={styles.shareBtn} hitSlop={8}>
-                <Share2 size={14} color="#FFFFFF" />
-                <Text style={styles.shareBtnText}>SMS</Text>
-              </Pressable>
-            )}
-            <Pressable onPress={handleAuthPress} style={styles.authBtn}>
-              {isAdmin ? (
-                <>
-                  <Unlock size={13} color="#4ADE80" />
-                  <Text style={styles.authTextAdmin}>Admin</Text>
-                </>
-              ) : (
-                <>
-                  <Lock size={13} color="#94A3B8" />
-                  <Text style={styles.authTextViewer}>Lecture</Text>
-                </>
-              )}
-            </Pressable>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <View style={[styles.headerTop, isCompactHeader ? styles.headerTopCompact : null]}>
+          <View style={styles.headerTitleWrap}>
+            <Text style={styles.headerTitle}>PLANNING</Text>
+            {unseenChanges > 0 && !isAdmin ? (
+              <View style={styles.notificationBadge}>
+                <BellDot size={12} color="#FFFFFF" />
+                <Text style={styles.notificationBadgeText}>{unseenChanges}</Text>
+              </View>
+            ) : null}
           </View>
+          <Pressable testID="auth-button" onPress={handleAuthPress} style={styles.authBtn}>
+            {isAdmin ? (
+              <>
+                <Unlock size={13} color="#4ADE80" />
+                <Text style={styles.authTextAdmin}>Admin</Text>
+              </>
+            ) : (
+              <>
+                <Lock size={13} color="#94A3B8" />
+                <Text style={styles.authTextViewer}>Lecture</Text>
+              </>
+            )}
+          </Pressable>
         </View>
 
         <View style={styles.weekNav}>
-          <Pressable onPress={handlePrevWeek} style={styles.navBtn} hitSlop={12}>
+          <Pressable testID="prev-week-button" onPress={handlePrevWeek} style={styles.navBtn} hitSlop={12}>
             <ChevronLeft size={20} color="#FFFFFF" />
           </Pressable>
           <View style={styles.weekInfo}>
             <Text style={styles.weekLabel}>S{weekNumber}</Text>
-            <Text style={styles.weekDates}>
+            <Text style={styles.weekDates} numberOfLines={1}>
               {formatDate(firstDate)} — {formatDate(lastDate)}
             </Text>
           </View>
-          <Pressable onPress={handleNextWeek} style={styles.navBtn} hitSlop={12}>
+          <Pressable testID="next-week-button" onPress={handleNextWeek} style={styles.navBtn} hitSlop={12}>
             <ChevronRight size={20} color="#FFFFFF" />
           </Pressable>
         </View>
@@ -300,7 +315,7 @@ export default function PlanningScreen() {
               Déplacez <Text style={styles.moveBold}>{movingTask.title}</Text>
             </Text>
           </View>
-          <Pressable onPress={handleCancelMove} style={styles.moveCancel}>
+          <Pressable testID="cancel-move-button" onPress={handleCancelMove} style={styles.moveCancel}>
             <XIcon size={18} color="#FFFFFF" />
           </Pressable>
         </View>
@@ -312,13 +327,34 @@ export default function PlanningScreen() {
             <Text style={styles.placementText}>
               Placez <Text style={styles.placementBold}>{selectedPending.title}</Text> sur le planning
             </Text>
-            <Text style={styles.placementSub}>
-              Touchez un créneau pour placer la tâche
-            </Text>
+            <Text style={styles.placementSub}>Touchez un créneau pour placer la tâche</Text>
           </View>
-          <Pressable onPress={handleCancelPlacement} style={styles.placementCancel}>
+          <Pressable testID="cancel-placement-button" onPress={handleCancelPlacement} style={styles.placementCancel}>
             <XIcon size={18} color="#FFFFFF" />
           </Pressable>
+        </View>
+      )}
+
+      {isAdmin && (
+        <View style={styles.monthSummaryCard}>
+          <View style={styles.monthSummaryHeader}>
+            <View>
+              <Text style={styles.monthSummaryLabel}>Compteur mensuel</Text>
+              <Text style={styles.monthSummaryTitle}>{monthLabel}</Text>
+            </View>
+            <View style={styles.monthSummaryIconWrap}>
+              <ChartColumnBig size={16} color={Colors.accent} />
+            </View>
+          </View>
+          <View style={styles.monthSummaryGrid}>
+            {monthlyHoursBySite.map((item) => (
+              <View key={item.siteKey} style={styles.monthSummaryItem}>
+                <View style={[styles.monthSummaryDot, { backgroundColor: item.color }]} />
+                <Text style={styles.monthSummaryItemLabel} numberOfLines={1}>{item.label}</Text>
+                <Text style={styles.monthSummaryItemValue}>{item.hours.toFixed(1).replace('.0', '')}h</Text>
+              </View>
+            ))}
+          </View>
         </View>
       )}
 
@@ -330,23 +366,27 @@ export default function PlanningScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.pendingChipsContent}
           >
-            {pendingTasks.map((pt) => {
-              const site = SITES[pt.site];
-              const mins = pt.estimatedMinutes;
-              const h = Math.floor(mins / 60);
-              const m = mins % 60;
-              const dur = h > 0 ? `${h}h${m > 0 ? m.toString().padStart(2, '0') : ''}` : `${m}min`;
+            {pendingTasks.map((pendingTask) => {
+              const site = SITES[pendingTask.site];
+              const minutes = pendingTask.estimatedMinutes;
+              const hours = Math.floor(minutes / 60);
+              const remainingMinutes = minutes % 60;
+              const durationLabel = hours > 0
+                ? `${hours}h${remainingMinutes > 0 ? remainingMinutes.toString().padStart(2, '0') : ''}`
+                : `${remainingMinutes}min`;
+
               return (
                 <Pressable
-                  key={pt.id}
+                  key={pendingTask.id}
+                  testID={`pending-chip-${pendingTask.id}`}
                   style={[styles.pendingChip, { borderColor: site.color }]}
-                  onPress={() => handleSelectPending(pt)}
+                  onPress={() => handleSelectPending(pendingTask)}
                 >
                   <View style={[styles.pendingChipDot, { backgroundColor: site.color }]} />
-                  <Text style={styles.pendingChipTitle} numberOfLines={1}>{pt.title}</Text>
+                  <Text style={styles.pendingChipTitle} numberOfLines={1}>{pendingTask.title}</Text>
                   <View style={styles.pendingChipDur}>
                     <Clock size={9} color={Colors.textMuted} />
-                    <Text style={styles.pendingChipDurText}>{dur}</Text>
+                    <Text style={styles.pendingChipDurText}>{durationLabel}</Text>
                   </View>
                 </Pressable>
               );
@@ -363,7 +403,6 @@ export default function PlanningScreen() {
         onTaskPress={handleTaskPress}
         onTaskLongPress={handleTaskLongPress}
         onSlotPress={handleSlotPress}
-        gridRef={gridRef}
       />
 
       <TaskDetailModal
@@ -395,13 +434,24 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: Colors.primary,
     paddingHorizontal: 12,
-    paddingBottom: 8,
+    paddingBottom: 10,
   },
   headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
+    gap: 12,
+    marginBottom: 8,
+  },
+  headerTopCompact: {
+    alignItems: 'flex-start',
+  },
+  headerTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap' as const,
+    gap: 8,
+    flexShrink: 1,
   },
   headerTitle: {
     fontSize: 13,
@@ -409,23 +459,18 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: 1,
   },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  shareBtn: {
+  notificationBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
+    backgroundColor: Colors.danger,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
   },
-  shareBtnText: {
+  notificationBadgeText: {
     fontSize: 11,
-    fontWeight: '600' as const,
+    fontWeight: '700' as const,
     color: '#FFFFFF',
   },
   authBtn: {
@@ -433,9 +478,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     backgroundColor: 'rgba(255,255,255,0.1)',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
   authTextAdmin: {
     fontSize: 11,
@@ -451,13 +496,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 8,
   },
   navBtn: {
-    padding: 4,
-    borderRadius: 6,
+    padding: 6,
+    borderRadius: 8,
     backgroundColor: 'rgba(255,255,255,0.1)',
   },
   weekInfo: {
+    flex: 1,
     alignItems: 'center',
   },
   weekLabel: {
@@ -522,6 +569,79 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: 6,
   },
+  monthSummaryCard: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 8,
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 14,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.05,
+    shadowRadius: 16,
+    elevation: 2,
+  },
+  monthSummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  monthSummaryLabel: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+  },
+  monthSummaryTitle: {
+    marginTop: 4,
+    fontSize: 18,
+    fontWeight: '700' as const,
+    color: Colors.text,
+    textTransform: 'capitalize' as const,
+  },
+  monthSummaryIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#DBEAFE',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  monthSummaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap' as const,
+    gap: 10,
+  },
+  monthSummaryItem: {
+    minWidth: '30%',
+    flexGrow: 1,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  monthSummaryDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginBottom: 8,
+  },
+  monthSummaryItemLabel: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+  },
+  monthSummaryItemValue: {
+    marginTop: 4,
+    fontSize: 18,
+    fontWeight: '800' as const,
+    color: Colors.text,
+  },
   pendingStrip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -529,7 +649,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     paddingLeft: 10,
-    paddingVertical: 6,
+    paddingVertical: 8,
   },
   pendingStripLabel: {
     fontSize: 10,

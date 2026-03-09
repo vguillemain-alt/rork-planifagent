@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useRef } from 'react';
+import React, { useMemo, useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   Animated,
   Pressable,
   useWindowDimensions,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { ScheduledTask, PendingTask } from '@/types/planning';
 import { SITES, DAY_SHORT } from '@/constants/sites';
@@ -27,7 +29,7 @@ import {
   START_HOUR,
 } from '@/utils/time';
 import { getHolidayForDate } from '@/utils/holidays';
-import { Check, X, Move } from 'lucide-react-native';
+import { Check, X, Move, ChevronsDown } from 'lucide-react-native';
 
 interface WeekGridProps {
   weekKey: string;
@@ -90,6 +92,7 @@ const TaskBlock = React.memo(function TaskBlock({
       ]}
     >
       <Pressable
+        testID={`scheduled-task-${task.id}`}
         onPress={onPress}
         onLongPress={isAdmin ? onLongPress : undefined}
         onPressIn={handlePressIn}
@@ -139,11 +142,20 @@ export default function WeekGrid({
   const { isAdmin } = useAuth();
   const { width: screenWidth } = useWindowDimensions();
   const dates = useMemo(() => getWeekDates(weekKey), [weekKey]);
-  const dayWidth = useMemo(() => Math.floor((screenWidth - TIME_COL_WIDTH) / 5), [screenWidth]);
+  const dayWidth = useMemo(() => {
+    const availableWidth = Math.max(screenWidth - TIME_COL_WIDTH, 280);
+    return Math.floor(availableWidth / 5);
+  }, [screenWidth]);
+  const scrollHintAnim = useRef(new Animated.Value(0)).current;
+  const [canScrollDown, setCanScrollDown] = useState<boolean>(false);
+  const [contentHeight, setContentHeight] = useState<number>(0);
+  const [containerHeight, setContainerHeight] = useState<number>(0);
 
   const tasksByDay = useMemo(() => {
     const map: Record<number, ScheduledTask[]> = {};
-    for (let i = 0; i < 5; i++) map[i] = [];
+    for (let index = 0; index < 5; index += 1) {
+      map[index] = [];
+    }
     for (const task of tasks) {
       if (map[task.dayIndex]) {
         map[task.dayIndex].push(task);
@@ -154,17 +166,17 @@ export default function WeekGrid({
 
   const dayHours = useMemo(() => {
     const hours: number[] = [];
-    for (let i = 0; i < 5; i++) {
-      hours.push(calculateDayHours(tasksByDay[i]));
+    for (let index = 0; index < 5; index += 1) {
+      hours.push(calculateDayHours(tasksByDay[index]));
     }
     return hours;
   }, [tasksByDay]);
 
   const restInfos = useMemo(() => {
     const infos: { isValid: boolean; restHours: number | null }[] = [];
-    for (let i = 0; i < 5; i++) {
-      if (i < 4) {
-        infos.push(checkRestTime(tasksByDay[i], tasksByDay[i + 1]));
+    for (let index = 0; index < 5; index += 1) {
+      if (index < 4) {
+        infos.push(checkRestTime(tasksByDay[index], tasksByDay[index + 1]));
       } else {
         infos.push({ isValid: true, restHours: null });
       }
@@ -173,10 +185,10 @@ export default function WeekGrid({
   }, [tasksByDay]);
 
   const holidays = useMemo(() => {
-    return dates.map(d => getHolidayForDate(d));
+    return dates.map((date) => getHolidayForDate(date));
   }, [dates]);
 
-  const totalHours = useMemo(() => dayHours.reduce((a, b) => a + b, 0), [dayHours]);
+  const totalHours = useMemo(() => dayHours.reduce((sum, value) => sum + value, 0), [dayHours]);
 
   const handleSlotPress = useCallback((dayIndex: number, slotIndex: number) => {
     const hour = Math.floor(slotIndex / 2) + START_HOUR;
@@ -198,8 +210,56 @@ export default function WeekGrid({
     }
   }, [onTaskLongPress]);
 
+  const handleContentSizeChange = useCallback((_: number, height: number) => {
+    console.log('WeekGrid content height:', height);
+    setContentHeight(height);
+    setCanScrollDown(height > containerHeight + 24);
+  }, [containerHeight]);
+
+  const handleLayout = useCallback((height: number) => {
+    console.log('WeekGrid container height:', height);
+    setContainerHeight(height);
+    setCanScrollDown(contentHeight > height + 24);
+  }, [contentHeight]);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    const layoutHeight = event.nativeEvent.layoutMeasurement.height;
+    const currentContentHeight = event.nativeEvent.contentSize.height;
+    const hasMore = offsetY + layoutHeight < currentContentHeight - 24;
+    setCanScrollDown(hasMore);
+  }, []);
+
+  React.useEffect(() => {
+    if (isAdmin || !canScrollDown) {
+      scrollHintAnim.stopAnimation();
+      scrollHintAnim.setValue(0);
+      return;
+    }
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scrollHintAnim, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(scrollHintAnim, {
+          toValue: 0,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [canScrollDown, isAdmin, scrollHintAnim]);
+
   const isPlacing = !!placingTask;
   const isMovingMode = !!movingTaskId;
+  const showScrollHint = !isAdmin && canScrollDown;
+  const scrollHintTranslateY = scrollHintAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 8],
+  });
 
   return (
     <View style={styles.container} ref={gridRef} collapsable={false}>
@@ -233,65 +293,86 @@ export default function WeekGrid({
         })}
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        bounces={false}
-        style={styles.verticalScroll}
-      >
-        <View style={styles.gridBody}>
-          <View style={[styles.timeCol, { width: TIME_COL_WIDTH }]}>
-            {TIME_SLOTS.map((slot, idx) => (
-              <View
-                key={idx}
-                style={[
-                  styles.timeSlot,
-                  idx % 2 === 0 ? styles.timeSlotHour : styles.timeSlotHalf,
-                ]}
-              >
-                {idx % 2 === 0 && (
-                  <Text style={styles.timeText}>{slot.slice(0, 5)}</Text>
-                )}
-              </View>
-            ))}
-          </View>
-
-          {dates.map((date, dayIdx) => {
-            const holiday = holidays[dayIdx];
-            const dayTasks = tasksByDay[dayIdx];
-            return (
-              <View key={dayIdx} style={[styles.dayColumn, { width: dayWidth }]}>
-                <View style={styles.dayBody}>
-                  {holiday && <View style={styles.holidayOverlay} />}
-
-                  {TIME_SLOTS.map((_, slotIdx) => (
-                    <TouchableOpacity
-                      key={slotIdx}
-                      style={[
-                        styles.slotCell,
-                        slotIdx % 2 === 0 ? styles.slotHour : styles.slotHalf,
-                        (isPlacing || isMovingMode) ? styles.slotPlacing : null,
-                      ]}
-                      onPress={() => handleSlotPress(dayIdx, slotIdx)}
-                      activeOpacity={isAdmin || isPlacing || isMovingMode ? 0.4 : 1}
-                    />
-                  ))}
-
-                  {dayTasks.map((task) => (
-                    <TaskBlock
-                      key={task.id}
-                      task={task}
-                      onPress={() => handleTaskPress(task, dayIdx)}
-                      onLongPress={() => handleTaskLongPress(task)}
-                      isMoving={movingTaskId === task.id}
-                      isAdmin={isAdmin}
-                    />
-                  ))}
+      <View style={styles.scrollWrapper}>
+        <ScrollView
+          testID="week-grid-scroll"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          style={styles.verticalScroll}
+          onLayout={(event) => handleLayout(event.nativeEvent.layout.height)}
+          onContentSizeChange={handleContentSizeChange}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+        >
+          <View style={styles.gridBody}>
+            <View style={[styles.timeCol, { width: TIME_COL_WIDTH }]}>
+              {TIME_SLOTS.map((slot, idx) => (
+                <View
+                  key={idx}
+                  style={[
+                    styles.timeSlot,
+                    idx % 2 === 0 ? styles.timeSlotHour : styles.timeSlotHalf,
+                  ]}
+                >
+                  {idx % 2 === 0 && (
+                    <Text style={styles.timeText}>{slot.slice(0, 5)}</Text>
+                  )}
                 </View>
-              </View>
-            );
-          })}
-        </View>
-      </ScrollView>
+              ))}
+            </View>
+
+            {dates.map((_, dayIdx) => {
+              const holiday = holidays[dayIdx];
+              const dayTasks = tasksByDay[dayIdx];
+              return (
+                <View key={dayIdx} style={[styles.dayColumn, { width: dayWidth }]}> 
+                  <View style={styles.dayBody}>
+                    {holiday && <View style={styles.holidayOverlay} />}
+
+                    {TIME_SLOTS.map((_, slotIdx) => (
+                      <TouchableOpacity
+                        key={slotIdx}
+                        testID={`slot-${dayIdx}-${slotIdx}`}
+                        style={[
+                          styles.slotCell,
+                          slotIdx % 2 === 0 ? styles.slotHour : styles.slotHalf,
+                          (isPlacing || isMovingMode) ? styles.slotPlacing : null,
+                        ]}
+                        onPress={() => handleSlotPress(dayIdx, slotIdx)}
+                        activeOpacity={isAdmin || isPlacing || isMovingMode ? 0.4 : 1}
+                      />
+                    ))}
+
+                    {dayTasks.map((task) => (
+                      <TaskBlock
+                        key={task.id}
+                        task={task}
+                        onPress={() => handleTaskPress(task, dayIdx)}
+                        onLongPress={() => handleTaskLongPress(task)}
+                        isMoving={movingTaskId === task.id}
+                        isAdmin={isAdmin}
+                      />
+                    ))}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </ScrollView>
+
+        {showScrollHint && (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.scrollHint,
+              { transform: [{ translateY: scrollHintTranslateY }] },
+            ]}
+          >
+            <ChevronsDown size={16} color="#FFFFFF" />
+            <Text style={styles.scrollHintText}>Faire défiler</Text>
+          </Animated.View>
+        )}
+      </View>
 
       <View style={styles.footerRow}>
         <View style={[styles.timeColFooter, { width: TIME_COL_WIDTH }]}>
@@ -383,6 +464,9 @@ const styles = StyleSheet.create({
     color: '#FBC02D',
     fontWeight: '600' as const,
     marginTop: 1,
+  },
+  scrollWrapper: {
+    flex: 1,
   },
   verticalScroll: {
     flex: 1,
@@ -491,6 +575,23 @@ const styles = StyleSheet.create({
   },
   commentDot: {
     fontSize: 7,
+  },
+  scrollHint: {
+    position: 'absolute' as const,
+    right: 12,
+    bottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(15,23,42,0.82)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  scrollHintText: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: '#FFFFFF',
   },
   footerRow: {
     flexDirection: 'row',

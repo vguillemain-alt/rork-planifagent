@@ -30,3 +30,14 @@ export interface ChangeLogEntry {
   taskTitle: string;
   description: string;
 }
+
+export interface PlanningQuestion {
+  id: string;
+  createdAt: string;
+  date: string;
+  question: string;
+  answer?: string;
+  answeredAt?: string;
+  viewerSeen: boolean;
+  adminSeen: boolean;
+}

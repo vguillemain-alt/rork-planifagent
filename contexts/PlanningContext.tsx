@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
 import * as Notifications from 'expo-notifications';
-import { ScheduledTask, PendingTask, ChangeLogEntry } from '@/types/planning';
+import { ScheduledTask, PendingTask, ChangeLogEntry, PlanningQuestion } from '@/types/planning';
 import { generateId } from '@/utils/time';
 import { configureNotificationsAsync, notifyPlanningChangeAsync } from '@/utils/notifications';
 
@@ -10,6 +10,7 @@ const TASKS_KEY = 'planning_tasks';
 const PENDING_KEY = 'pending_tasks';
 const CHANGELOG_KEY = 'change_log';
 const LAST_SEEN_KEY = 'last_seen_change';
+const QUESTIONS_KEY = 'planning_questions';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -24,6 +25,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [pendingTasks, setPendingTasks] = useState<PendingTask[]>([]);
   const [changeLog, setChangeLog] = useState<ChangeLogEntry[]>([]);
+  const [questions, setQuestions] = useState<PlanningQuestion[]>([]);
   const [lastSeenTimestamp, setLastSeenTimestamp] = useState<string>('');
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
   const hasBootstrappedNotificationsRef = useRef<boolean>(false);
@@ -32,10 +34,11 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [tasksData, pendingData, logData, lastSeen] = await Promise.all([
+        const [tasksData, pendingData, logData, questionsData, lastSeen] = await Promise.all([
           AsyncStorage.getItem(TASKS_KEY),
           AsyncStorage.getItem(PENDING_KEY),
           AsyncStorage.getItem(CHANGELOG_KEY),
+          AsyncStorage.getItem(QUESTIONS_KEY),
           AsyncStorage.getItem(LAST_SEEN_KEY),
         ]);
 
@@ -49,6 +52,10 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
 
         if (logData) {
           setChangeLog(JSON.parse(logData) as ChangeLogEntry[]);
+        }
+
+        if (questionsData) {
+          setQuestions(JSON.parse(questionsData) as PlanningQuestion[]);
         }
 
         if (lastSeen) {
@@ -116,6 +123,11 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     setChangeLog(updated);
     await AsyncStorage.setItem(CHANGELOG_KEY, JSON.stringify(updated));
   }, [changeLog]);
+
+  const persistQuestions = useCallback(async (updated: PlanningQuestion[]) => {
+    setQuestions(updated);
+    await AsyncStorage.setItem(QUESTIONS_KEY, JSON.stringify(updated));
+  }, []);
 
   const addTask = useCallback(async (task: Omit<ScheduledTask, 'id'>) => {
     const newTask: ScheduledTask = { ...task, id: generateId() };
@@ -283,6 +295,56 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     await addChangeLog('move', task.title, `Déplacé : ${task.title}`);
   }, [tasks, persistTasks, addChangeLog]);
 
+  const askQuestion = useCallback(async (date: string, question: string) => {
+    const entry: PlanningQuestion = {
+      id: generateId(),
+      createdAt: new Date().toISOString(),
+      date,
+      question,
+      viewerSeen: true,
+      adminSeen: false,
+      answer: undefined,
+      answeredAt: undefined,
+    };
+
+    const updated = [entry, ...questions].slice(0, 50);
+    await persistQuestions(updated);
+    return entry;
+  }, [questions, persistQuestions]);
+
+  const answerQuestion = useCallback(async (questionId: string, answer: string) => {
+    const answeredAt = new Date().toISOString();
+    const updated = questions.map((item) => {
+      if (item.id !== questionId) {
+        return item;
+      }
+
+      return {
+        ...item,
+        answer,
+        answeredAt,
+        viewerSeen: false,
+        adminSeen: true,
+      };
+    });
+
+    await persistQuestions(updated);
+  }, [questions, persistQuestions]);
+
+  const markAdminQuestionSeen = useCallback(async (questionId: string) => {
+    const updated = questions.map((item) => (
+      item.id === questionId ? { ...item, adminSeen: true } : item
+    ));
+    await persistQuestions(updated);
+  }, [questions, persistQuestions]);
+
+  const markViewerAnswerSeen = useCallback(async (questionId: string) => {
+    const updated = questions.map((item) => (
+      item.id === questionId ? { ...item, viewerSeen: true } : item
+    ));
+    await persistQuestions(updated);
+  }, [questions, persistQuestions]);
+
   const getTasksForWeek = useCallback((weekKey: string): ScheduledTask[] => {
     return tasks.filter((task) => task.weekKey === weekKey);
   }, [tasks]);
@@ -301,12 +363,23 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     await AsyncStorage.setItem(LAST_SEEN_KEY, now);
   }, []);
 
+  const latestAdminQuestion = useMemo(() => {
+    return questions.find((item) => !item.adminSeen) ?? null;
+  }, [questions]);
+
+  const latestViewerAnswer = useMemo(() => {
+    return questions.find((item) => item.answer && !item.viewerSeen) ?? null;
+  }, [questions]);
+
   return useMemo(() => ({
     tasks,
     pendingTasks,
     changeLog,
+    questions,
     isLoaded,
     unseenChanges,
+    latestAdminQuestion,
+    latestViewerAnswer,
     addTask,
     updateTask,
     deleteTask,
@@ -315,14 +388,21 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     schedulePendingTask,
     unscheduleTask,
     moveTask,
+    askQuestion,
+    answerQuestion,
+    markAdminQuestionSeen,
+    markViewerAnswerSeen,
     getTasksForWeek,
     markChangesSeen,
   }), [
     tasks,
     pendingTasks,
     changeLog,
+    questions,
     isLoaded,
     unseenChanges,
+    latestAdminQuestion,
+    latestViewerAnswer,
     addTask,
     updateTask,
     deleteTask,
@@ -331,6 +411,10 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     schedulePendingTask,
     unscheduleTask,
     moveTask,
+    askQuestion,
+    answerQuestion,
+    markAdminQuestionSeen,
+    markViewerAnswerSeen,
     getTasksForWeek,
     markChangesSeen,
   ]);

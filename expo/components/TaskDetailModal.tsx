@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,13 +9,25 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
-import { X, Edit3, Trash2, MapPin, Clock, MessageSquare, Save, AlertTriangle, Undo2 } from 'lucide-react-native';
+import { X, Edit3, Trash2, MapPin, Clock, MessageSquare, Save, AlertTriangle, Undo2, Send, ImagePlus } from 'lucide-react-native';
+import { Image as ExpoImage } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { ScheduledTask } from '@/types/planning';
 import { SITES, DAY_LABELS } from '@/constants/sites';
 import Colors from '@/constants/colors';
 import { formatTime, taskDurationMinutes } from '@/utils/time';
 import { getHolidayForDate, FrenchHoliday } from '@/utils/holidays';
+import {
+  fetchTaskMessagesAsync,
+  sendTaskMessageAsync,
+  uploadPhotoAsync,
+  photoUrl,
+  TaskMessage,
+  MessageRole,
+} from '@/utils/api';
 
 interface TaskDetailModalProps {
   task: ScheduledTask | null;
@@ -42,6 +54,12 @@ export default function TaskDetailModal({
 }: TaskDetailModalProps) {
   const [editingComment, setEditingComment] = useState<boolean>(false);
   const [commentText, setCommentText] = useState<string>('');
+  const [messages, setMessages] = useState<TaskMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState<boolean>(false);
+  const [messageText, setMessageText] = useState<string>('');
+  const [isSending, setIsSending] = useState<boolean>(false);
+  const [viewerPhotoId, setViewerPhotoId] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (task) {
@@ -50,12 +68,123 @@ export default function TaskDetailModal({
     }
   }, [task]);
 
+  const loadMessages = useCallback(async (taskKey: string) => {
+    try {
+      const fetched = await fetchTaskMessagesAsync(taskKey);
+      setMessages(fetched);
+    } catch (error) {
+      console.log('Error loading task messages:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!visible || !task) {
+      return;
+    }
+    setMessagesLoading(true);
+    void loadMessages(task.id).finally(() => setMessagesLoading(false));
+
+    pollRef.current = setInterval(() => {
+      void loadMessages(task.id);
+    }, 5000);
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [visible, task, loadMessages]);
+
   const handleSaveComment = useCallback(() => {
     if (task && onSaveComment) {
       onSaveComment(task.id, commentText.trim());
     }
     setEditingComment(false);
   }, [task, commentText, onSaveComment]);
+
+  const handleSend = useCallback(async () => {
+    if (!task || isSending) {
+      return;
+    }
+    const text = messageText.trim();
+    if (!text) {
+      return;
+    }
+    setIsSending(true);
+    try {
+      const role: MessageRole = isAdmin ? 'admin' : 'viewer';
+      const message = await sendTaskMessageAsync(task.id, role, text);
+      setMessages((previous) => [...previous, message]);
+      setMessageText('');
+    } catch (error) {
+      console.log('Error sending message:', error);
+      Alert.alert('Erreur', 'Impossible d\u2019envoyer le message. Vérifiez la connexion.');
+    } finally {
+      setIsSending(false);
+    }
+  }, [task, isAdmin, isSending, messageText]);
+
+  const handleAttachPhoto = useCallback(() => {
+    if (!task || isSending) {
+      return;
+    }
+
+    const pickAndSend = async (result: ImagePicker.ImagePickerResult) => {
+      const asset = result.assets?.[0];
+      if (!asset?.base64) {
+        return;
+      }
+      setIsSending(true);
+      try {
+        const mime = asset.mimeType === 'image/png' ? 'image/png' : 'image/jpeg';
+        const photoId = await uploadPhotoAsync(asset.base64, mime);
+        const role: MessageRole = isAdmin ? 'admin' : 'viewer';
+        const message = await sendTaskMessageAsync(task.id, role, messageText.trim(), photoId);
+        setMessages((previous) => [...previous, message]);
+        setMessageText('');
+      } catch (error) {
+        console.log('Error uploading photo:', error);
+        Alert.alert('Erreur', 'Impossible d\u2019envoyer la photo. Vérifiez la connexion.');
+      } finally {
+        setIsSending(false);
+      }
+    };
+
+    const launchCamera = async () => {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission', 'Autorisez l\u2019accès à l\u2019appareil photo.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.4,
+        base64: true,
+      });
+      await pickAndSend(result);
+    };
+
+    const launchLibrary = async () => {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission', 'Autorisez l\u2019accès à la galerie.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.4,
+        base64: true,
+      });
+      await pickAndSend(result);
+    };
+
+    Alert.alert('Ajouter une photo', 'Choisissez une source', [
+      { text: 'Appareil photo', onPress: () => void launchCamera() },
+      { text: 'Galerie', onPress: () => void launchLibrary() },
+      { text: 'Annuler', style: 'cancel' },
+    ]);
+  }, [task, isAdmin, isSending, messageText]);
 
   const handleDelete = useCallback(() => {
     if (task && onDelete) {
@@ -95,6 +224,7 @@ export default function TaskDetailModal({
   }
 
   const isFromPending = !!task.fromPending;
+  const myRole: MessageRole = isAdmin ? 'admin' : 'viewer';
 
   return (
     <Modal
@@ -175,6 +305,94 @@ export default function TaskDetailModal({
                 )}
               </View>
 
+              <View style={styles.chatSection}>
+                <View style={styles.chatHeader}>
+                  <MessageSquare size={14} color={Colors.accent} />
+                  <Text style={styles.chatTitle}>Échanges sur cette tâche</Text>
+                </View>
+
+                {messagesLoading && messages.length === 0 ? (
+                  <ActivityIndicator size="small" color={Colors.accent} style={styles.chatLoader} />
+                ) : messages.length === 0 ? (
+                  <Text style={styles.chatEmpty}>
+                    Aucun échange. Posez une question ou ajoutez une photo.
+                  </Text>
+                ) : (
+                  <View style={styles.chatList}>
+                    {messages.map((message) => {
+                      const isMine = message.role === myRole;
+                      return (
+                        <View
+                          key={message.id}
+                          style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : null]}
+                        >
+                          <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther]}>
+                            <Text style={styles.bubbleRole}>
+                              {message.role === 'admin' ? 'Admin' : 'Utilisateur'}
+                            </Text>
+                            {message.text ? (
+                              <Text style={styles.bubbleText}>{message.text}</Text>
+                            ) : null}
+                            {message.photoId ? (
+                              <Pressable
+                                onPress={() => setViewerPhotoId(message.photoId ?? null)}
+                                style={styles.bubblePhoto}
+                              >
+                                <ExpoImage
+                                  source={{ uri: photoUrl(message.photoId) }}
+                                  style={styles.bubblePhotoImage}
+                                  contentFit="cover"
+                                  transition={150}
+                                />
+                              </Pressable>
+                            ) : null}
+                            <Text style={styles.bubbleTime}>
+                              {new Date(message.createdAt).toLocaleDateString('fr-FR', {
+                                day: 'numeric',
+                                month: 'short',
+                              })}{' '}
+                              {new Date(message.createdAt).toLocaleTimeString('fr-FR', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+
+                <View style={styles.chatInputRow}>
+                  <Pressable
+                    onPress={handleAttachPhoto}
+                    style={styles.attachBtn}
+                    disabled={isSending}
+                  >
+                    <ImagePlus size={18} color={Colors.accent} />
+                  </Pressable>
+                  <TextInput
+                    style={styles.chatInput}
+                    value={messageText}
+                    onChangeText={setMessageText}
+                    placeholder={isAdmin ? 'Répondre...' : 'Votre question...'}
+                    placeholderTextColor={Colors.textMuted}
+                    multiline
+                  />
+                  <Pressable
+                    onPress={() => void handleSend()}
+                    style={[styles.sendBtn, (!messageText.trim() || isSending) ? styles.sendBtnDisabled : null]}
+                    disabled={!messageText.trim() || isSending}
+                  >
+                    {isSending ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Send size={16} color="#FFFFFF" />
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+
               {isAdmin && (
                 <View style={styles.adminActions}>
                   <Pressable style={styles.editBtn} onPress={handleEdit}>
@@ -197,6 +415,26 @@ export default function TaskDetailModal({
           </Pressable>
         </KeyboardAvoidingView>
       </Pressable>
+
+      <Modal
+        visible={viewerPhotoId !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewerPhotoId(null)}
+      >
+        <Pressable style={styles.viewerOverlay} onPress={() => setViewerPhotoId(null)}>
+          {viewerPhotoId ? (
+            <ExpoImage
+              source={{ uri: photoUrl(viewerPhotoId) }}
+              style={styles.viewerImage}
+              contentFit="contain"
+            />
+          ) : null}
+          <View style={styles.viewerClose}>
+            <X size={22} color="#FFFFFF" />
+          </View>
+        </Pressable>
+      </Modal>
     </Modal>
   );
 }
@@ -217,7 +455,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderRadius: 16,
     overflow: 'hidden' as const,
-    maxHeight: 500,
+    maxHeight: 560,
   },
   topStripe: {
     height: 4,
@@ -347,6 +585,129 @@ const styles = StyleSheet.create({
     fontWeight: '600' as const,
     color: '#FFFFFF',
   },
+  chatSection: {
+    marginTop: 12,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 10,
+    padding: 12,
+  },
+  chatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 10,
+  },
+  chatTitle: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.3,
+  },
+  chatLoader: {
+    paddingVertical: 14,
+  },
+  chatEmpty: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    lineHeight: 19,
+    paddingVertical: 6,
+  },
+  chatList: {
+    gap: 8,
+    marginBottom: 10,
+  },
+  bubbleRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+  },
+  bubbleRowMine: {
+    justifyContent: 'flex-end',
+  },
+  bubble: {
+    maxWidth: '85%',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  bubbleMine: {
+    backgroundColor: '#DBEAFE',
+    borderBottomRightRadius: 4,
+  },
+  bubbleOther: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderBottomLeftRadius: 4,
+  },
+  bubbleRole: {
+    fontSize: 10,
+    fontWeight: '700' as const,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase' as const,
+    marginBottom: 3,
+  },
+  bubbleText: {
+    fontSize: 14,
+    color: Colors.text,
+    lineHeight: 19,
+  },
+  bubblePhoto: {
+    marginTop: 6,
+    borderRadius: 8,
+    overflow: 'hidden' as const,
+  },
+  bubblePhotoImage: {
+    width: 160,
+    height: 120,
+    borderRadius: 8,
+  },
+  bubbleTime: {
+    marginTop: 4,
+    fontSize: 9,
+    color: Colors.textMuted,
+    textAlign: 'right' as const,
+  },
+  chatInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  attachBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: Colors.surface,
+    borderWidth: 1.5,
+    borderColor: Colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatInput: {
+    flex: 1,
+    minHeight: 38,
+    maxHeight: 90,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 19,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 12,
+    paddingTop: 9,
+    paddingBottom: 9,
+    fontSize: 13,
+    color: Colors.text,
+  },
+  sendBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: Colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendBtnDisabled: {
+    opacity: 0.4,
+  },
   adminActions: {
     flexDirection: 'row',
     gap: 10,
@@ -395,5 +756,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600' as const,
     color: '#F97316',
+  },
+  viewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  viewerImage: {
+    width: '100%',
+    height: '85%',
+  },
+  viewerClose: {
+    position: 'absolute' as const,
+    top: 48,
+    right: 24,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

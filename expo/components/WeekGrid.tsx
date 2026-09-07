@@ -166,10 +166,12 @@ export default function WeekGrid({
     return result;
   }, [daysPerPage, pageCount]);
 
-  const dayWidth = useMemo(() => {
+  // Each page stretches its own columns so the grid always fills the full width
+  // (e.g. the last page with fewer days gets wider columns instead of a gap).
+  const pageDayWidths = useMemo(() => {
     const availableWidth = Math.max(screenWidth - TIME_COL_WIDTH, 280);
-    return Math.floor(availableWidth / daysPerPage);
-  }, [screenWidth, daysPerPage]);
+    return pages.map((pageDays) => Math.floor(availableWidth / pageDays.length));
+  }, [pages, screenWidth]);
 
   const [measuredHeight, setMeasuredHeight] = useState<number>(0);
   const slotHeight = measuredHeight > 0
@@ -303,7 +305,7 @@ export default function WeekGrid({
     outputRange: [0, 8],
   });
 
-  const renderDayHeader = (dayIdx: number) => {
+  const renderDayHeader = (dayIdx: number, width: number) => {
     const date = dates[dayIdx];
     const holiday = holidays[dayIdx];
     const onLeave = isLeaveDay(dayIdx);
@@ -330,7 +332,7 @@ export default function WeekGrid({
           key={dayIdx}
           testID={`day-header-${dayIdx}`}
           onPress={() => handleHeaderPress(dayIdx)}
-          style={[styles.dayHeaderCell, { width: dayWidth }, onLeave ? styles.dayHeaderLeave : holiday ? styles.dayHeaderHoliday : null]}
+          style={[styles.dayHeaderCell, { width }, onLeave ? styles.dayHeaderLeave : holiday ? styles.dayHeaderHoliday : null]}
         >
           {headerContent}
         </Pressable>
@@ -340,19 +342,19 @@ export default function WeekGrid({
     return (
       <View
         key={dayIdx}
-        style={[styles.dayHeaderCell, { width: dayWidth }, onLeave ? styles.dayHeaderLeave : holiday ? styles.dayHeaderHoliday : null]}
+        style={[styles.dayHeaderCell, { width }, onLeave ? styles.dayHeaderLeave : holiday ? styles.dayHeaderHoliday : null]}
       >
         {headerContent}
       </View>
     );
   };
 
-  const renderDayColumn = (dayIdx: number) => {
+  const renderDayColumn = (dayIdx: number, width: number) => {
     const holiday = holidays[dayIdx];
     const onLeave = isLeaveDay(dayIdx);
     const dayTasks = tasksByDay[dayIdx];
     return (
-      <View key={dayIdx} style={[styles.dayColumn, { width: dayWidth }]}>
+      <View key={dayIdx} style={[styles.dayColumn, { width }]}>
         <View style={styles.dayBody}>
           {holiday && <View style={styles.holidayOverlay} />}
           {onLeave && (
@@ -414,13 +416,13 @@ export default function WeekGrid({
     </View>
   );
 
-  const renderFooter = (pageDays: number[]) => (
+  const renderFooter = (pageDays: number[], width: number) => (
     <View style={styles.footerRow}>
       <View style={[styles.timeColFooter, { width: TIME_COL_WIDTH }]}>
         <Text style={styles.footerLabel}>H</Text>
       </View>
       {pageDays.map((dayIdx) => (
-        <View key={dayIdx} style={[styles.footerCell, { width: dayWidth }]}>
+        <View key={dayIdx} style={[styles.footerCell, { width }]}>
           <Text style={[
             styles.footerHours,
             isLeaveDay(dayIdx) ? styles.footerHoursLeave : null,
@@ -471,7 +473,7 @@ export default function WeekGrid({
           <View key={pageIdx} style={[styles.page, { width: screenWidth }]}>
             <View style={styles.headerRow}>
               <View style={{ width: TIME_COL_WIDTH }} />
-              {pageDays.map((dayIdx) => renderDayHeader(dayIdx))}
+              {pageDays.map((dayIdx) => renderDayHeader(dayIdx, pageDayWidths[pageIdx]))}
             </View>
 
             <View
@@ -489,7 +491,7 @@ export default function WeekGrid({
               >
                 <View style={styles.gridBody}>
                   {renderTimeColumn()}
-                  {pageDays.map((dayIdx) => renderDayColumn(dayIdx))}
+                  {pageDays.map((dayIdx) => renderDayColumn(dayIdx, pageDayWidths[pageIdx]))}
                 </View>
               </ScrollView>
 
@@ -507,7 +509,7 @@ export default function WeekGrid({
               )}
             </View>
 
-            {renderFooter(pageDays)}
+            {renderFooter(pageDays, pageDayWidths[pageIdx])}
           </View>
         ))}
       </ScrollView>

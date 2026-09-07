@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { ChangeLogEntry } from '@/types/planning';
+import { API_BASE } from '@/utils/api';
 
 const DEFAULT_TITLE = 'PlanifAgent';
 const ANDROID_CHANNEL_ID = 'planning-updates';
@@ -84,6 +85,58 @@ export async function notifyPlanningChangeAsync(entry: ChangeLogEntry): Promise<
     });
   } catch (error) {
     console.log('Error sending planning notification:', error);
+  }
+}
+
+export type PushRole = 'admin' | 'viewer';
+
+/**
+ * Registers the device for remote push notifications and stores the Expo
+ * push token on the backend for the given role. Silently skips platforms
+ * that cannot receive push tokens (web); errors on emulators or denied
+ * permission are caught and logged without breaking the app.
+ */
+export async function registerPushTokenAsync(role: PushRole): Promise<void> {
+  try {
+    if (Platform.OS === 'web') {
+      return;
+    }
+
+    const permissions = await Notifications.getPermissionsAsync();
+    let status = permissions.status;
+
+    if (status !== 'granted') {
+      const requested = await Notifications.requestPermissionsAsync();
+      status = requested.status;
+    }
+
+    if (status !== 'granted') {
+      console.log('Push notification permission not granted');
+      return;
+    }
+
+    const projectId = process.env.EXPO_PUBLIC_PROJECT_ID;
+    if (!projectId) {
+      console.log('Missing EXPO_PUBLIC_PROJECT_ID for push registration');
+      return;
+    }
+
+    const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId });
+    const token = tokenResponse.data;
+
+    const response = await fetch(`${API_BASE}/tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, role }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`push token registration failed: ${response.status}`);
+    }
+
+    console.log('Push token registered for role:', role);
+  } catch (error) {
+    console.log('Error registering push token:', error);
   }
 }
 

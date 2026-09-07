@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
+import { registerPushTokenAsync } from '@/utils/notifications';
 
 const ADMIN_PASSWORD = 'Boubet61.';
 const AUTH_KEY = 'auth_is_admin';
@@ -19,6 +20,15 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       setIsLoading(false);
     });
   }, []);
+
+  // Register the device for push notifications once the role is known,
+  // and re-register when the role changes (admin login/logout).
+  useEffect(() => {
+    if (isLoading) {
+      return;
+    }
+    void registerPushTokenAsync(isAdmin ? 'admin' : 'viewer');
+  }, [isAdmin, isLoading]);
 
   const login = useCallback((password: string): boolean => {
     if (password === ADMIN_PASSWORD) {

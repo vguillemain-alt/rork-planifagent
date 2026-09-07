@@ -20,7 +20,13 @@ interface PhotoRow {
   data: Uint8Array;
 }
 
+interface TokenRow {
+  token: string;
+  role: string;
+}
+
 const MAX_PHOTO_BYTES = 1_500_000;
+const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
 /**
  * Single-instance store for task conversations and task photos.
@@ -49,6 +55,13 @@ export class TaskChat extends DurableObject {
     );
     this.ctx.storage.sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_messages_task ON messages (task_key, created_at)`,
+    );
+    this.ctx.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS push_tokens (
+        token TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
     );
   }
 
@@ -88,10 +101,12 @@ export class TaskChat extends DurableObject {
         role?: string;
         text?: string;
         photoId?: string;
+        taskTitle?: string;
       };
       const role = body.role === "admin" ? "admin" : "viewer";
       const text = (body.text ?? "").slice(0, 2000);
       const photoId = body.photoId ?? null;
+      const taskTitle = (body.taskTitle ?? "").slice(0, 120);
       if (!text && !photoId) {
         return Response.json({ error: "empty message" }, { status: 400, headers: CORS });
       }
@@ -108,6 +123,13 @@ export class TaskChat extends DurableObject {
         photoId,
         createdAt,
       );
+
+      await this.sendPushToRoleAsync(role === "admin" ? "viewer" : "admin", {
+        title: role === "admin" ? "Réponse de l'admin" : "Nouvelle question",
+        body: `${taskTitle ? `${taskTitle} — ` : ""}${text || "📷 Photo"}`,
+        data: { taskKey },
+      });
+
       return Response.json(
         {
           message: {
@@ -121,6 +143,24 @@ export class TaskChat extends DurableObject {
         },
         { headers: CORS },
       );
+    }
+
+    // Register (or update) a push notification token.
+    if (request.method === "POST" && path === "/tokens") {
+      const body = (await request.json()) as { token?: string; role?: string };
+      const token = (body.token ?? "").slice(0, 256);
+      if (!token.startsWith("ExponentPushToken") && !token.startsWith("ExpoPushToken")) {
+        return Response.json({ error: "invalid token" }, { status: 400, headers: CORS });
+      }
+      const role = body.role === "admin" ? "admin" : "viewer";
+      this.ctx.storage.sql.exec(
+        `INSERT INTO push_tokens (token, role, created_at) VALUES (?, ?, ?)
+         ON CONFLICT (token) DO UPDATE SET role = excluded.role`,
+        token,
+        role,
+        Date.now(),
+      );
+      return Response.json({ ok: true }, { headers: CORS });
     }
 
     // Upload a photo (JSON base64 payload).
@@ -169,6 +209,45 @@ export class TaskChat extends DurableObject {
     }
 
     return Response.json({ error: "not found" }, { status: 404, headers: CORS });
+  }
+
+  /**
+   * Sends an Expo push notification to every registered device of a role.
+   * Failures are logged and never break the request that triggered them.
+   */
+  private async sendPushToRoleAsync(
+    role: string,
+    payload: { title: string; body: string; data?: Record<string, string> },
+  ): Promise<void> {
+    try {
+      const rows = this.ctx.storage.sql
+        .exec<TokenRow>(`SELECT token, role FROM push_tokens WHERE role = ?`, role)
+        .toArray();
+      if (rows.length === 0) {
+        return;
+      }
+
+      await Promise.all(
+        rows.map((row) =>
+          fetch(EXPO_PUSH_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              to: row.token,
+              title: payload.title,
+              body: payload.body,
+              data: payload.data ?? {},
+              sound: "default",
+              channelId: "planning-updates",
+            }),
+          }).catch((error: unknown) => {
+            console.log("push send failed:", error);
+          }),
+        ),
+      );
+    } catch (error) {
+      console.log("push dispatch failed:", error);
+    }
   }
 }
 

@@ -8,11 +8,9 @@ import {
   ActivityIndicator,
   ScrollView,
   useWindowDimensions,
-  Modal,
-  TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Lock, Unlock, Clock, X as XIcon, Move, BellDot, ChartColumnBig, MessageSquareMore, Send, Reply, CalendarDays } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Lock, Unlock, Clock, X as XIcon, Move, BellDot, ChartColumnBig } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
@@ -57,12 +55,6 @@ export default function PlanningScreen() {
     unscheduleTask,
     moveTask,
     unseenChanges,
-    askQuestion,
-    latestAdminQuestion,
-    latestViewerAnswer,
-    answerQuestion,
-    markAdminQuestionSeen,
-    markViewerAnswerSeen,
     leaveDays,
     toggleLeaveDay,
   } = usePlanning();
@@ -73,12 +65,6 @@ export default function PlanningScreen() {
   const [detailDayDate, setDetailDayDate] = useState<Date | null>(null);
   const [showDetailModal, setShowDetailModal] = useState<boolean>(false);
   const [showMonthlyCounter, setShowMonthlyCounter] = useState<boolean>(false);
-  const [showAskQuestionModal, setShowAskQuestionModal] = useState<boolean>(false);
-  const [selectedQuestionDate, setSelectedQuestionDate] = useState<string>('');
-  const [questionText, setQuestionText] = useState<string>('');
-  const [showAdminQuestionModal, setShowAdminQuestionModal] = useState<boolean>(false);
-  const [adminAnswerText, setAdminAnswerText] = useState<string>('');
-  const [showViewerAnswerModal, setShowViewerAnswerModal] = useState<boolean>(false);
   const [altoExpanded, setAltoExpanded] = useState<boolean>(false);
 
   const weekNumber = getWeekNumber(weekKey);
@@ -87,25 +73,6 @@ export default function PlanningScreen() {
   const firstDate = dates[0];
   const lastDate = dates[4];
   const isCompactHeader = width < 390;
-
-  useEffect(() => {
-    if (dates[0]) {
-      setSelectedQuestionDate((current) => current || dates[0].toISOString());
-    }
-  }, [dates]);
-
-  useEffect(() => {
-    if (isAdmin && latestAdminQuestion) {
-      setAdminAnswerText(latestAdminQuestion.answer ?? '');
-      setShowAdminQuestionModal(true);
-    }
-  }, [isAdmin, latestAdminQuestion]);
-
-  useEffect(() => {
-    if (!isAdmin && latestViewerAnswer?.answer) {
-      setShowViewerAnswerModal(true);
-    }
-  }, [isAdmin, latestViewerAnswer]);
 
   const formatDate = (date: Date): string => {
     return `${date.getDate()} ${date.toLocaleDateString('fr-FR', { month: 'short' })}`;
@@ -344,47 +311,6 @@ export default function PlanningScreen() {
     void updateTask(taskId, { comment });
   }, [updateTask]);
 
-  const handleAskQuestion = useCallback(() => {
-    const trimmedQuestion = questionText.trim();
-    if (!selectedQuestionDate || !trimmedQuestion) {
-      Alert.alert('Erreur', 'Choisissez une date et saisissez votre question.');
-      return;
-    }
-
-    void askQuestion(selectedQuestionDate, trimmedQuestion);
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setQuestionText('');
-    setShowAskQuestionModal(false);
-    Alert.alert('Question envoyée', "L'administrateur verra votre question en se connectant.");
-  }, [askQuestion, questionText, selectedQuestionDate]);
-
-  const handleAnswerQuestion = useCallback(() => {
-    const trimmedAnswer = adminAnswerText.trim();
-    if (!latestAdminQuestion || !trimmedAnswer) {
-      Alert.alert('Erreur', 'Saisissez une réponse.');
-      return;
-    }
-
-    void answerQuestion(latestAdminQuestion.id, trimmedAnswer);
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setShowAdminQuestionModal(false);
-    setAdminAnswerText('');
-  }, [adminAnswerText, answerQuestion, latestAdminQuestion]);
-
-  const handleCloseAdminQuestionModal = useCallback(() => {
-    setShowAdminQuestionModal(false);
-    if (latestAdminQuestion) {
-      void markAdminQuestionSeen(latestAdminQuestion.id);
-    }
-  }, [latestAdminQuestion, markAdminQuestionSeen]);
-
-  const handleCloseViewerAnswerModal = useCallback(() => {
-    setShowViewerAnswerModal(false);
-    if (latestViewerAnswer) {
-      void markViewerAnswerSeen(latestViewerAnswer.id);
-    }
-  }, [latestViewerAnswer, markViewerAnswerSeen]);
-
   if (!isLoaded || authLoading) {
     return (
       <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
@@ -467,8 +393,8 @@ export default function PlanningScreen() {
         </View>
       )}
 
-      <View style={styles.quickActionsRow}>
-        {isAdmin ? (
+      {isAdmin && (
+        <View style={styles.quickActionsRow}>
           <Pressable
             testID="monthly-counter-button"
             onPress={() => setShowMonthlyCounter((previous) => !previous)}
@@ -479,17 +405,8 @@ export default function PlanningScreen() {
               {showMonthlyCounter ? 'Masquer le compteur' : 'Compteur mensuel'}
             </Text>
           </Pressable>
-        ) : (
-          <Pressable
-            testID="ask-question-button"
-            onPress={() => setShowAskQuestionModal(true)}
-            style={styles.quickActionButton}
-          >
-            <MessageSquareMore size={16} color={Colors.accent} />
-            <Text style={styles.quickActionButtonText}>Poser une question</Text>
-          </Pressable>
-        )}
-      </View>
+        </View>
+      )}
 
       {isAdmin && showMonthlyCounter && (
         <View style={styles.monthSummaryCard}>
@@ -598,147 +515,6 @@ export default function PlanningScreen() {
         onSaveComment={handleSaveComment}
         dayDate={detailDayDate}
       />
-
-      <Modal visible={showAskQuestionModal} transparent animationType="fade" onRequestClose={() => setShowAskQuestionModal(false)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setShowAskQuestionModal(false)}>
-          <Pressable style={styles.popupCard} onPress={() => {}}>
-            <View style={styles.popupHeader}>
-              <View style={styles.popupHeaderLeft}>
-                <View style={styles.popupIconWrap}>
-                  <CalendarDays size={16} color={Colors.accent} />
-                </View>
-                <View>
-                  <Text style={styles.popupTitle}>Question sur une date</Text>
-                  <Text style={styles.popupSubtitle}>Choisissez un jour puis écrivez votre question</Text>
-                </View>
-              </View>
-              <Pressable onPress={() => setShowAskQuestionModal(false)} style={styles.popupCloseButton}>
-                <XIcon size={18} color={Colors.textSecondary} />
-              </Pressable>
-            </View>
-
-            <View style={styles.dateChipRow}>
-              {dates.map((date) => {
-                const value = date.toISOString();
-                const isSelected = selectedQuestionDate === value;
-                return (
-                  <Pressable
-                    key={value}
-                    testID={`question-date-${value}`}
-                    onPress={() => setSelectedQuestionDate(value)}
-                    style={[styles.dateChip, isSelected ? styles.dateChipActive : null]}
-                  >
-                    <Text style={[styles.dateChipDay, isSelected ? styles.dateChipTextActive : null]}>
-                      {date.toLocaleDateString('fr-FR', { weekday: 'short' })}
-                    </Text>
-                    <Text style={[styles.dateChipDate, isSelected ? styles.dateChipTextActive : null]}>
-                      {date.getDate()}/{date.getMonth() + 1}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <TextInput
-              testID="question-input"
-              style={styles.popupInput}
-              value={questionText}
-              onChangeText={setQuestionText}
-              placeholder="Ex: Que se passe-t-il le 18 mars ?"
-              placeholderTextColor={Colors.textMuted}
-              multiline
-            />
-
-            <Pressable testID="submit-question-button" style={styles.popupPrimaryButton} onPress={handleAskQuestion}>
-              <Send size={16} color="#FFFFFF" />
-              <Text style={styles.popupPrimaryButtonText}>Envoyer</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      <Modal visible={showAdminQuestionModal} transparent animationType="fade" onRequestClose={handleCloseAdminQuestionModal}>
-        <Pressable style={styles.modalOverlay} onPress={handleCloseAdminQuestionModal}>
-          <Pressable style={styles.popupCard} onPress={() => {}}>
-            <View style={styles.popupHeader}>
-              <View style={styles.popupHeaderLeft}>
-                <View style={styles.popupIconWrap}>
-                  <Reply size={16} color={Colors.accent} />
-                </View>
-                <View>
-                  <Text style={styles.popupTitle}>Question utilisateur</Text>
-                  <Text style={styles.popupSubtitle}>Répondez pour envoyer un POP-UP à l'utilisateur</Text>
-                </View>
-              </View>
-              <Pressable onPress={handleCloseAdminQuestionModal} style={styles.popupCloseButton}>
-                <XIcon size={18} color={Colors.textSecondary} />
-              </Pressable>
-            </View>
-
-            {latestAdminQuestion ? (
-              <>
-                <View style={styles.questionInfoCard}>
-                  <Text style={styles.questionInfoLabel}>Date concernée</Text>
-                  <Text style={styles.questionInfoValue}>
-                    {new Date(latestAdminQuestion.date).toLocaleDateString('fr-FR', {
-                      weekday: 'long',
-                      day: 'numeric',
-                      month: 'long',
-                      year: 'numeric',
-                    })}
-                  </Text>
-                  <Text style={styles.questionBubble}>{latestAdminQuestion.question}</Text>
-                </View>
-
-                <TextInput
-                  testID="admin-answer-input"
-                  style={styles.popupInput}
-                  value={adminAnswerText}
-                  onChangeText={setAdminAnswerText}
-                  placeholder="Votre réponse..."
-                  placeholderTextColor={Colors.textMuted}
-                  multiline
-                />
-
-                <Pressable testID="submit-answer-button" style={styles.popupPrimaryButton} onPress={handleAnswerQuestion}>
-                  <Reply size={16} color="#FFFFFF" />
-                  <Text style={styles.popupPrimaryButtonText}>Envoyer la réponse</Text>
-                </Pressable>
-              </>
-            ) : null}
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      <Modal visible={showViewerAnswerModal} transparent animationType="fade" onRequestClose={handleCloseViewerAnswerModal}>
-        <Pressable style={styles.modalOverlay} onPress={handleCloseViewerAnswerModal}>
-          <Pressable style={styles.popupCard} onPress={() => {}}>
-            <View style={styles.popupHeader}>
-              <View style={styles.popupHeaderLeft}>
-                <View style={styles.popupIconWrap}>
-                  <MessageSquareMore size={16} color={Colors.accent} />
-                </View>
-                <View>
-                  <Text style={styles.popupTitle}>Réponse administrateur</Text>
-                  <Text style={styles.popupSubtitle}>Votre réponse est arrivée</Text>
-                </View>
-              </View>
-              <Pressable onPress={handleCloseViewerAnswerModal} style={styles.popupCloseButton}>
-                <XIcon size={18} color={Colors.textSecondary} />
-              </Pressable>
-            </View>
-
-            {latestViewerAnswer ? (
-              <View style={styles.questionInfoCard}>
-                <Text style={styles.questionInfoLabel}>Question</Text>
-                <Text style={styles.questionBubble}>{latestViewerAnswer.question}</Text>
-                <Text style={[styles.questionInfoLabel, styles.answerLabel]}>Réponse</Text>
-                <Text style={styles.answerBubble}>{latestViewerAnswer.answer ?? ''}</Text>
-              </View>
-            ) : null}
-          </Pressable>
-        </Pressable>
-      </Modal>
     </View>
   );
 }
@@ -1069,163 +845,5 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: Colors.textMuted,
     fontWeight: '500' as const,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  popupCard: {
-    width: '100%',
-    maxWidth: 460,
-    backgroundColor: Colors.surface,
-    borderRadius: 20,
-    padding: 18,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.14,
-    shadowRadius: 24,
-    elevation: 8,
-  },
-  popupHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 12,
-    marginBottom: 16,
-  },
-  popupHeaderLeft: {
-    flex: 1,
-    flexDirection: 'row',
-    gap: 10,
-  },
-  popupIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
-    backgroundColor: '#DBEAFE',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  popupCloseButton: {
-    padding: 4,
-  },
-  popupTitle: {
-    fontSize: 17,
-    fontWeight: '800' as const,
-    color: Colors.text,
-  },
-  popupSubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: Colors.textSecondary,
-    lineHeight: 18,
-  },
-  dateChipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap' as const,
-    gap: 8,
-    marginBottom: 14,
-  },
-  dateChip: {
-    minWidth: 62,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surfaceAlt,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  dateChipActive: {
-    backgroundColor: Colors.accent,
-    borderColor: Colors.accent,
-  },
-  dateChipDay: {
-    fontSize: 11,
-    fontWeight: '700' as const,
-    color: Colors.textSecondary,
-    textTransform: 'capitalize' as const,
-  },
-  dateChipDate: {
-    marginTop: 4,
-    fontSize: 13,
-    fontWeight: '800' as const,
-    color: Colors.text,
-  },
-  dateChipTextActive: {
-    color: '#FFFFFF',
-  },
-  popupInput: {
-    minHeight: 110,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surfaceAlt,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: Colors.text,
-    textAlignVertical: 'top' as const,
-  },
-  popupPrimaryButton: {
-    marginTop: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderRadius: 14,
-    backgroundColor: Colors.accent,
-    paddingVertical: 13,
-  },
-  popupPrimaryButtonText: {
-    fontSize: 14,
-    fontWeight: '700' as const,
-    color: '#FFFFFF',
-  },
-  questionInfoCard: {
-    borderRadius: 14,
-    backgroundColor: Colors.surfaceAlt,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: 14,
-    marginBottom: 14,
-  },
-  questionInfoLabel: {
-    fontSize: 11,
-    fontWeight: '700' as const,
-    color: Colors.textSecondary,
-    textTransform: 'uppercase' as const,
-    letterSpacing: 0.4,
-  },
-  questionInfoValue: {
-    marginTop: 6,
-    fontSize: 15,
-    fontWeight: '700' as const,
-    color: Colors.text,
-    textTransform: 'capitalize' as const,
-  },
-  questionBubble: {
-    marginTop: 12,
-    fontSize: 14,
-    lineHeight: 20,
-    color: Colors.text,
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 12,
-  },
-  answerLabel: {
-    marginTop: 14,
-  },
-  answerBubble: {
-    marginTop: 8,
-    fontSize: 14,
-    lineHeight: 20,
-    color: '#FFFFFF',
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    padding: 12,
   },
 });

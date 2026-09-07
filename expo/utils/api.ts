@@ -3,7 +3,7 @@
  * The backend is a Cloudflare Worker reachable at EXPO_PUBLIC_RORK_FUNCTIONS_URL.
  */
 
-const API_BASE = process.env.EXPO_PUBLIC_RORK_FUNCTIONS_URL ?? '';
+export const API_BASE = process.env.EXPO_PUBLIC_RORK_FUNCTIONS_URL ?? '';
 
 export type MessageRole = 'admin' | 'viewer';
 
@@ -33,12 +33,13 @@ export async function sendTaskMessageAsync(
   taskKey: string,
   role: MessageRole,
   text: string,
-  photoId?: string
+  photoId?: string,
+  taskTitle?: string
 ): Promise<TaskMessage> {
   const response = await fetch(`${API_BASE}/chat/${encodeURIComponent(taskKey)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, text, photoId }),
+    body: JSON.stringify({ role, text, photoId, taskTitle }),
   });
   if (!response.ok) {
     throw new Error(`send message failed: ${response.status}`);

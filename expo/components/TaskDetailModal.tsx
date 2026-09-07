@@ -114,7 +114,7 @@ export default function TaskDetailModal({
     setIsSending(true);
     try {
       const role: MessageRole = isAdmin ? 'admin' : 'viewer';
-      const message = await sendTaskMessageAsync(task.id, role, text);
+      const message = await sendTaskMessageAsync(task.id, role, text, undefined, task.title);
       setMessages((previous) => [...previous, message]);
       setMessageText('');
     } catch (error) {
@@ -140,7 +140,7 @@ export default function TaskDetailModal({
         const mime = asset.mimeType === 'image/png' ? 'image/png' : 'image/jpeg';
         const photoId = await uploadPhotoAsync(asset.base64, mime);
         const role: MessageRole = isAdmin ? 'admin' : 'viewer';
-        const message = await sendTaskMessageAsync(task.id, role, messageText.trim(), photoId);
+        const message = await sendTaskMessageAsync(task.id, role, messageText.trim(), photoId, task.title);
         setMessages((previous) => [...previous, message]);
         setMessageText('');
       } catch (error) {

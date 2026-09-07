@@ -1,4 +1,13 @@
-export type SiteKey = 'PAV_B' | 'PAV_A' | 'ALTO_DEPOT' | 'ALTO_AGENCE' | 'MULTI_SERVICES';
+export type SiteKey =
+  | 'PAV_B'
+  | 'PAV_A'
+  | 'ALTO_DEPOT'
+  | 'ALTO_AGENCE'
+  | 'MULTI_SERVICES'
+  | 'PIEL'
+  | 'GOUGEUL'
+  | 'COSNEAU'
+  | 'COISNARD';
 
 export interface ScheduledTask {
   id: string;

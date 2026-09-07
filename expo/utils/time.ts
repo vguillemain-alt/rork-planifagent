@@ -1,7 +1,7 @@
 import { ScheduledTask } from '@/types/planning';
 
 export const START_HOUR = 5;
-export const END_HOUR = 23;
+export const END_HOUR = 22;
 export const SLOT_HEIGHT = 30;
 export const SLOTS_COUNT = (END_HOUR - START_HOUR) * 2;
 export const TIME_COL_WIDTH = 38;
@@ -19,14 +19,14 @@ export function timeToMinutesFromStart(hour: number, minute: number): number {
   return (hour - START_HOUR) * 60 + minute;
 }
 
-export function taskTopPosition(task: ScheduledTask): number {
-  return (timeToMinutesFromStart(task.startHour, task.startMinute) / 30) * SLOT_HEIGHT;
+export function taskTopPosition(task: ScheduledTask, slotHeight: number = SLOT_HEIGHT): number {
+  return (timeToMinutesFromStart(task.startHour, task.startMinute) / 30) * slotHeight;
 }
 
-export function taskHeight(task: ScheduledTask): number {
+export function taskHeight(task: ScheduledTask, slotHeight: number = SLOT_HEIGHT): number {
   const durationMinutes =
     (task.endHour * 60 + task.endMinute) - (task.startHour * 60 + task.startMinute);
-  return Math.max((durationMinutes / 30) * SLOT_HEIGHT, SLOT_HEIGHT * 0.8);
+  return Math.max((durationMinutes / 30) * slotHeight, slotHeight * 0.8);
 }
 
 export function taskDurationMinutes(task: ScheduledTask): number {
@@ -35,6 +35,15 @@ export function taskDurationMinutes(task: ScheduledTask): number {
 
 export function formatTime(hour: number, minute: number): string {
   return `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Returns a local YYYY-MM-DD key used for leave-day (CP) storage.
+ */
+export function getDateKey(date: Date): string {
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 export function getWeekKey(date: Date): string {

@@ -38,9 +38,43 @@ export const SITES: Record<SiteKey, SiteConfig> = {
     bgColor: '#FFFDE7',
     textColor: '#F57F17',
   },
+  PIEL: {
+    label: 'PIEL',
+    color: '#8B5CF6',
+    bgColor: '#F3E8FF',
+    textColor: '#5B21B6',
+  },
+  GOUGEUL: {
+    label: 'GOUGEUL',
+    color: '#0D9488',
+    bgColor: '#CCFBF1',
+    textColor: '#115E59',
+  },
+  COSNEAU: {
+    label: 'COSNEAU',
+    color: '#DC2626',
+    bgColor: '#FEE2E2',
+    textColor: '#991B1B',
+  },
+  COISNARD: {
+    label: 'COISNARD',
+    color: '#0891B2',
+    bgColor: '#CFFAFE',
+    textColor: '#155E75',
+  },
 };
 
-export const SITE_KEYS: SiteKey[] = ['PAV_B', 'PAV_A', 'ALTO_DEPOT', 'ALTO_AGENCE', 'MULTI_SERVICES'];
+export const SITE_KEYS: SiteKey[] = [
+  'PAV_B',
+  'PAV_A',
+  'ALTO_DEPOT',
+  'ALTO_AGENCE',
+  'MULTI_SERVICES',
+  'PIEL',
+  'GOUGEUL',
+  'COSNEAU',
+  'COISNARD',
+];
 
 export const DAY_LABELS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
 export const DAY_SHORT = ['LUN', 'MAR', 'MER', 'JEU', 'VEN'];

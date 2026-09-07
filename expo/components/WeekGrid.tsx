@@ -23,19 +23,23 @@ import {
   calculateDayHours,
   checkRestTime,
   getWeekDates,
+  getDateKey,
   SLOT_HEIGHT,
+  SLOTS_COUNT,
   TIME_COL_WIDTH,
   taskDurationMinutes,
   START_HOUR,
 } from '@/utils/time';
 import { getHolidayForDate } from '@/utils/holidays';
-import { Check, X, Move, ChevronsDown } from 'lucide-react-native';
+import { Check, X, Move, ChevronsDown, Palmtree } from 'lucide-react-native';
 
 interface WeekGridProps {
   weekKey: string;
   tasks: ScheduledTask[];
   placingTask?: PendingTask | null;
   movingTaskId?: string | null;
+  leaveDays?: string[];
+  onToggleLeaveDay?: (dateKey: string) => void;
   onTaskPress?: (task: ScheduledTask, dayDate: Date) => void;
   onTaskLongPress?: (task: ScheduledTask) => void;
   onSlotPress?: (dayIndex: number, startHour: number, startMinute: number) => void;
@@ -43,25 +47,28 @@ interface WeekGridProps {
 }
 
 const TIME_SLOTS = generateTimeSlots();
+const MIN_SLOT_HEIGHT = 16;
 
 const TaskBlock = React.memo(function TaskBlock({
   task,
+  slotHeight,
   onPress,
   onLongPress,
   isMoving,
   isAdmin,
 }: {
   task: ScheduledTask;
+  slotHeight: number;
   onPress: () => void;
   onLongPress?: () => void;
   isMoving?: boolean;
   isAdmin?: boolean;
 }) {
   const site = SITES[task.site];
-  const top = taskTopPosition(task);
-  const height = taskHeight(task);
+  const top = taskTopPosition(task, slotHeight);
+  const height = taskHeight(task, slotHeight);
   const duration = taskDurationMinutes(task);
-  const isSmall = duration <= 30;
+  const isSmall = duration <= 30 || height < 26;
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = useCallback(() => {
@@ -134,6 +141,8 @@ export default function WeekGrid({
   tasks,
   placingTask,
   movingTaskId,
+  leaveDays = [],
+  onToggleLeaveDay,
   onTaskPress,
   onTaskLongPress,
   onSlotPress,
@@ -142,14 +151,39 @@ export default function WeekGrid({
   const { isAdmin } = useAuth();
   const { width: screenWidth } = useWindowDimensions();
   const dates = useMemo(() => getWeekDates(weekKey), [weekKey]);
+
+  // Phone: 2 full days visible, larger screens: 3 full days
+  const daysPerPage = screenWidth >= 768 ? 3 : 2;
+  const pageCount = Math.ceil(5 / daysPerPage);
+  const pages = useMemo(() => {
+    const result: number[][] = [];
+    for (let page = 0; page < pageCount; page += 1) {
+      const start = page * daysPerPage;
+      result.push(
+        Array.from({ length: Math.min(daysPerPage, 5 - start) }, (_, offset) => start + offset)
+      );
+    }
+    return result;
+  }, [daysPerPage, pageCount]);
+
   const dayWidth = useMemo(() => {
     const availableWidth = Math.max(screenWidth - TIME_COL_WIDTH, 280);
-    return Math.floor(availableWidth / 5);
-  }, [screenWidth]);
+    return Math.floor(availableWidth / daysPerPage);
+  }, [screenWidth, daysPerPage]);
+
+  const [measuredHeight, setMeasuredHeight] = useState<number>(0);
+  const slotHeight = measuredHeight > 0
+    ? Math.max(MIN_SLOT_HEIGHT, Math.floor(measuredHeight / SLOTS_COUNT))
+    : SLOT_HEIGHT;
+
   const scrollHintAnim = useRef(new Animated.Value(0)).current;
   const [canScrollDown, setCanScrollDown] = useState<boolean>(false);
   const [contentHeight, setContentHeight] = useState<number>(0);
-  const [containerHeight, setContainerHeight] = useState<number>(0);
+
+  const isLeaveDay = useCallback(
+    (dayIndex: number): boolean => leaveDays.includes(getDateKey(dates[dayIndex])),
+    [leaveDays, dates]
+  );
 
   const tasksByDay = useMemo(() => {
     const map: Record<number, ScheduledTask[]> = {};
@@ -188,15 +222,19 @@ export default function WeekGrid({
     return dates.map((date) => getHolidayForDate(date));
   }, [dates]);
 
-  const totalHours = useMemo(() => dayHours.reduce((sum, value) => sum + value, 0), [dayHours]);
+  const totalHours = useMemo(
+    () => dayHours.reduce((sum, value) => sum + value, 0),
+    [dayHours]
+  );
 
   const handleSlotPress = useCallback((dayIndex: number, slotIndex: number) => {
+    if (!onSlotPress || isLeaveDay(dayIndex)) {
+      return;
+    }
     const hour = Math.floor(slotIndex / 2) + START_HOUR;
     const minute = (slotIndex % 2) * 30;
-    if (onSlotPress) {
-      onSlotPress(dayIndex, hour, minute);
-    }
-  }, [onSlotPress]);
+    onSlotPress(dayIndex, hour, minute);
+  }, [onSlotPress, isLeaveDay]);
 
   const handleTaskPress = useCallback((task: ScheduledTask, dayIdx: number) => {
     if (onTaskPress) {
@@ -210,17 +248,21 @@ export default function WeekGrid({
     }
   }, [onTaskLongPress]);
 
-  const handleContentSizeChange = useCallback((_: number, height: number) => {
-    console.log('WeekGrid content height:', height);
-    setContentHeight(height);
-    setCanScrollDown(height > containerHeight + 24);
-  }, [containerHeight]);
+  const handleHeaderPress = useCallback((dayIndex: number) => {
+    if (!isAdmin || !onToggleLeaveDay) {
+      return;
+    }
+    onToggleLeaveDay(getDateKey(dates[dayIndex]));
+  }, [isAdmin, onToggleLeaveDay, dates]);
 
-  const handleLayout = useCallback((height: number) => {
-    console.log('WeekGrid container height:', height);
-    setContainerHeight(height);
-    setCanScrollDown(contentHeight > height + 24);
-  }, [contentHeight]);
+  const handleBodyLayout = useCallback((height: number) => {
+    setMeasuredHeight(height);
+  }, []);
+
+  const handleContentSizeChange = useCallback((_: number, height: number) => {
+    setContentHeight(height);
+    setCanScrollDown(height > measuredHeight + 24);
+  }, [measuredHeight]);
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetY = event.nativeEvent.contentOffset.y;
@@ -261,149 +303,214 @@ export default function WeekGrid({
     outputRange: [0, 8],
   });
 
+  const renderDayHeader = (dayIdx: number) => {
+    const date = dates[dayIdx];
+    const holiday = holidays[dayIdx];
+    const onLeave = isLeaveDay(dayIdx);
+    const headerContent = (
+      <>
+        <Text style={styles.dayLabel}>{DAY_SHORT[dayIdx]}</Text>
+        <Text style={styles.dayDate}>
+          {date.getDate()}/{(date.getMonth() + 1).toString().padStart(2, '0')}
+        </Text>
+        {onLeave ? (
+          <View style={styles.cpChip}>
+            <Palmtree size={8} color="#FFFFFF" />
+            <Text style={styles.cpChipText}>CP</Text>
+          </View>
+        ) : holiday ? (
+          <Text style={styles.holidayLabel} numberOfLines={1}>{holiday.name}</Text>
+        ) : null}
+      </>
+    );
+
+    if (isAdmin && onToggleLeaveDay) {
+      return (
+        <Pressable
+          key={dayIdx}
+          testID={`day-header-${dayIdx}`}
+          onPress={() => handleHeaderPress(dayIdx)}
+          style={[styles.dayHeaderCell, { width: dayWidth }, onLeave ? styles.dayHeaderLeave : holiday ? styles.dayHeaderHoliday : null]}
+        >
+          {headerContent}
+        </Pressable>
+      );
+    }
+
+    return (
+      <View
+        key={dayIdx}
+        style={[styles.dayHeaderCell, { width: dayWidth }, onLeave ? styles.dayHeaderLeave : holiday ? styles.dayHeaderHoliday : null]}
+      >
+        {headerContent}
+      </View>
+    );
+  };
+
+  const renderDayColumn = (dayIdx: number) => {
+    const holiday = holidays[dayIdx];
+    const onLeave = isLeaveDay(dayIdx);
+    const dayTasks = tasksByDay[dayIdx];
+    return (
+      <View key={dayIdx} style={[styles.dayColumn, { width: dayWidth }]}>
+        <View style={styles.dayBody}>
+          {holiday && <View style={styles.holidayOverlay} />}
+          {onLeave && (
+            <View style={styles.leaveOverlay} pointerEvents="box-only">
+              <Palmtree size={Math.min(28, slotHeight * 1.4)} color="rgba(124,58,237,0.5)" />
+              <Text style={styles.leaveWatermark}>CP</Text>
+            </View>
+          )}
+
+          {TIME_SLOTS.map((_, slotIdx) => (
+            <TouchableOpacity
+              key={slotIdx}
+              testID={`slot-${dayIdx}-${slotIdx}`}
+              style={[
+                styles.slotCell,
+                { height: slotHeight },
+                slotIdx % 2 === 0 ? styles.slotHour : styles.slotHalf,
+                (isPlacing || isMovingMode) && !onLeave ? styles.slotPlacing : null,
+                onLeave ? styles.slotDisabled : null,
+              ]}
+              onPress={onLeave ? undefined : () => handleSlotPress(dayIdx, slotIdx)}
+              activeOpacity={isAdmin || isPlacing || isMovingMode ? 0.4 : 1}
+              disabled={onLeave}
+            />
+          ))}
+
+          {dayTasks.map((task) => (
+            <TaskBlock
+              key={task.id}
+              task={task}
+              slotHeight={slotHeight}
+              onPress={() => handleTaskPress(task, dayIdx)}
+              onLongPress={() => handleTaskLongPress(task)}
+              isMoving={movingTaskId === task.id}
+              isAdmin={isAdmin}
+            />
+          ))}
+        </View>
+      </View>
+    );
+  };
+
+  const renderTimeColumn = () => (
+    <View style={[styles.timeCol, { width: TIME_COL_WIDTH }]}>
+      {TIME_SLOTS.map((slot, idx) => (
+        <View
+          key={idx}
+          style={[
+            styles.timeSlot,
+            { height: slotHeight },
+            idx % 2 === 0 ? styles.timeSlotHour : styles.timeSlotHalf,
+          ]}
+        >
+          {idx % 2 === 0 && (
+            <Text style={styles.timeText}>{slot.slice(0, 5)}</Text>
+          )}
+        </View>
+      ))}
+    </View>
+  );
+
+  const renderFooter = (pageDays: number[]) => (
+    <View style={styles.footerRow}>
+      <View style={[styles.timeColFooter, { width: TIME_COL_WIDTH }]}>
+        <Text style={styles.footerLabel}>H</Text>
+      </View>
+      {pageDays.map((dayIdx) => (
+        <View key={dayIdx} style={[styles.footerCell, { width: dayWidth }]}>
+          <Text style={[
+            styles.footerHours,
+            isLeaveDay(dayIdx) ? styles.footerHoursLeave : null,
+          ]}>
+            {isLeaveDay(dayIdx) ? 'CP' : `${dayHours[dayIdx] % 1 === 0 ? dayHours[dayIdx] : dayHours[dayIdx].toFixed(1)}h`}
+          </Text>
+          {!isLeaveDay(dayIdx) && restInfos[dayIdx].restHours !== null && (
+            <View style={[
+              styles.footerRest,
+              restInfos[dayIdx].isValid ? styles.footerRestValid : styles.footerRestInvalid,
+            ]}>
+              {restInfos[dayIdx].isValid ? (
+                <Check size={8} color={Colors.success} />
+              ) : (
+                <X size={8} color={Colors.danger} />
+              )}
+              <Text style={[
+                styles.footerRestText,
+                { color: restInfos[dayIdx].isValid ? Colors.success : Colors.danger },
+              ]}>
+                {restInfos[dayIdx].restHours}h
+              </Text>
+            </View>
+          )}
+        </View>
+      ))}
+    </View>
+  );
+
   return (
     <View style={styles.container} ref={gridRef} collapsable={false}>
       <View style={styles.totalBar}>
         <Text style={styles.totalLabel}>Total semaine</Text>
         <Text style={styles.totalValue}>{totalHours.toFixed(1).replace('.0', '')}h</Text>
-      </View>
-
-      <View style={styles.headerRow}>
-        <View style={{ width: TIME_COL_WIDTH }} />
-        {dates.map((date, idx) => {
-          const holiday = holidays[idx];
-          return (
-            <View
-              key={idx}
-              style={[
-                styles.dayHeaderCell,
-                { width: dayWidth },
-                holiday ? styles.dayHeaderHoliday : null,
-              ]}
-            >
-              <Text style={styles.dayLabel}>{DAY_SHORT[idx]}</Text>
-              <Text style={styles.dayDate}>
-                {date.getDate()}/{(date.getMonth() + 1).toString().padStart(2, '0')}
-              </Text>
-              {holiday && (
-                <Text style={styles.holidayLabel} numberOfLines={1}>{holiday.name}</Text>
-              )}
-            </View>
-          );
-        })}
-      </View>
-
-      <View style={styles.scrollWrapper}>
-        <ScrollView
-          testID="week-grid-scroll"
-          showsVerticalScrollIndicator={false}
-          bounces={false}
-          style={styles.verticalScroll}
-          onLayout={(event) => handleLayout(event.nativeEvent.layout.height)}
-          onContentSizeChange={handleContentSizeChange}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-        >
-          <View style={styles.gridBody}>
-            <View style={[styles.timeCol, { width: TIME_COL_WIDTH }]}>
-              {TIME_SLOTS.map((slot, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.timeSlot,
-                    idx % 2 === 0 ? styles.timeSlotHour : styles.timeSlotHalf,
-                  ]}
-                >
-                  {idx % 2 === 0 && (
-                    <Text style={styles.timeText}>{slot.slice(0, 5)}</Text>
-                  )}
-                </View>
-              ))}
-            </View>
-
-            {dates.map((_, dayIdx) => {
-              const holiday = holidays[dayIdx];
-              const dayTasks = tasksByDay[dayIdx];
-              return (
-                <View key={dayIdx} style={[styles.dayColumn, { width: dayWidth }]}> 
-                  <View style={styles.dayBody}>
-                    {holiday && <View style={styles.holidayOverlay} />}
-
-                    {TIME_SLOTS.map((_, slotIdx) => (
-                      <TouchableOpacity
-                        key={slotIdx}
-                        testID={`slot-${dayIdx}-${slotIdx}`}
-                        style={[
-                          styles.slotCell,
-                          slotIdx % 2 === 0 ? styles.slotHour : styles.slotHalf,
-                          (isPlacing || isMovingMode) ? styles.slotPlacing : null,
-                        ]}
-                        onPress={() => handleSlotPress(dayIdx, slotIdx)}
-                        activeOpacity={isAdmin || isPlacing || isMovingMode ? 0.4 : 1}
-                      />
-                    ))}
-
-                    {dayTasks.map((task) => (
-                      <TaskBlock
-                        key={task.id}
-                        task={task}
-                        onPress={() => handleTaskPress(task, dayIdx)}
-                        onLongPress={() => handleTaskLongPress(task)}
-                        isMoving={movingTaskId === task.id}
-                        isAdmin={isAdmin}
-                      />
-                    ))}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        </ScrollView>
-
-        {showScrollHint && (
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.scrollHint,
-              { transform: [{ translateY: scrollHintTranslateY }] },
-            ]}
-          >
-            <ChevronsDown size={16} color="#FFFFFF" />
-            <Text style={styles.scrollHintText}>Faire défiler</Text>
-          </Animated.View>
+        {isAdmin && (
+          <Text style={styles.totalHint}>Touchez un jour pour CP</Text>
         )}
       </View>
 
-      <View style={styles.footerRow}>
-        <View style={[styles.timeColFooter, { width: TIME_COL_WIDTH }]}>
-          <Text style={styles.footerLabel}>H</Text>
-        </View>
-        {dayHours.map((hours, idx) => (
-          <View key={idx} style={[styles.footerCell, { width: dayWidth }]}>
-            <Text style={styles.footerHours}>
-              {hours % 1 === 0 ? hours : hours.toFixed(1)}h
-            </Text>
-            {restInfos[idx].restHours !== null && (
-              <View style={[
-                styles.footerRest,
-                restInfos[idx].isValid ? styles.footerRestValid : styles.footerRestInvalid,
-              ]}>
-                {restInfos[idx].isValid ? (
-                  <Check size={8} color={Colors.success} />
-                ) : (
-                  <X size={8} color={Colors.danger} />
-                )}
-                <Text style={[
-                  styles.footerRestText,
-                  { color: restInfos[idx].isValid ? Colors.success : Colors.danger },
-                ]}>
-                  {restInfos[idx].restHours}h
-                </Text>
-              </View>
-            )}
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        bounces={false}
+        style={styles.horizontalScroll}
+      >
+        {pages.map((pageDays, pageIdx) => (
+          <View key={pageIdx} style={[styles.page, { width: screenWidth }]}>
+            <View style={styles.headerRow}>
+              <View style={{ width: TIME_COL_WIDTH }} />
+              {pageDays.map((dayIdx) => renderDayHeader(dayIdx))}
+            </View>
+
+            <View
+              style={styles.scrollWrapper}
+              onLayout={(event) => handleBodyLayout(event.nativeEvent.layout.height)}
+            >
+              <ScrollView
+                testID="week-grid-scroll"
+                showsVerticalScrollIndicator={false}
+                bounces={false}
+                style={styles.verticalScroll}
+                onContentSizeChange={handleContentSizeChange}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+              >
+                <View style={styles.gridBody}>
+                  {renderTimeColumn()}
+                  {pageDays.map((dayIdx) => renderDayColumn(dayIdx))}
+                </View>
+              </ScrollView>
+
+              {showScrollHint && (
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    styles.scrollHint,
+                    { transform: [{ translateY: scrollHintTranslateY }] },
+                  ]}
+                >
+                  <ChevronsDown size={16} color="#FFFFFF" />
+                  <Text style={styles.scrollHintText}>Faire défiler</Text>
+                </Animated.View>
+              )}
+            </View>
+
+            {renderFooter(pageDays)}
           </View>
         ))}
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -433,6 +540,16 @@ const styles = StyleSheet.create({
     fontWeight: '700' as const,
     color: '#FFFFFF',
   },
+  totalHint: {
+    fontSize: 9,
+    color: '#94A3B8',
+  },
+  horizontalScroll: {
+    flex: 1,
+  },
+  page: {
+    flex: 1,
+  },
   headerRow: {
     flexDirection: 'row',
     borderBottomWidth: 2,
@@ -447,6 +564,9 @@ const styles = StyleSheet.create({
   },
   dayHeaderHoliday: {
     backgroundColor: 'rgba(249,115,22,0.3)',
+  },
+  dayHeaderLeave: {
+    backgroundColor: 'rgba(124,58,237,0.55)',
   },
   dayLabel: {
     fontSize: 10,
@@ -465,6 +585,22 @@ const styles = StyleSheet.create({
     fontWeight: '600' as const,
     marginTop: 1,
   },
+  cpChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#7C3AED',
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    marginTop: 2,
+  },
+  cpChipText: {
+    fontSize: 8,
+    fontWeight: '800' as const,
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
   scrollWrapper: {
     flex: 1,
   },
@@ -480,7 +616,6 @@ const styles = StyleSheet.create({
     borderRightColor: Colors.border,
   },
   timeSlot: {
-    height: SLOT_HEIGHT,
     justifyContent: 'flex-start',
     paddingRight: 4,
     alignItems: 'flex-end',
@@ -515,9 +650,25 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(249,115,22,0.04)',
     zIndex: 0,
   },
-  slotCell: {
-    height: SLOT_HEIGHT,
+  leaveOverlay: {
+    position: 'absolute' as const,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(124,58,237,0.10)',
+    zIndex: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
   },
+  leaveWatermark: {
+    fontSize: 22,
+    fontWeight: '900' as const,
+    color: 'rgba(124,58,237,0.45)',
+    letterSpacing: 3,
+  },
+  slotCell: {},
   slotHour: {
     borderTopWidth: 1,
     borderTopColor: Colors.border,
@@ -528,6 +679,9 @@ const styles = StyleSheet.create({
   },
   slotPlacing: {
     backgroundColor: 'rgba(59,130,246,0.03)',
+  },
+  slotDisabled: {
+    backgroundColor: 'rgba(124,58,237,0.03)',
   },
   taskBlock: {
     position: 'absolute' as const,
@@ -621,6 +775,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700' as const,
     color: Colors.text,
+  },
+  footerHoursLeave: {
+    color: '#7C3AED',
   },
   footerRest: {
     flexDirection: 'row',

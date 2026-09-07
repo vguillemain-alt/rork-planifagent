@@ -11,6 +11,7 @@ const PENDING_KEY = 'pending_tasks';
 const CHANGELOG_KEY = 'change_log';
 const LAST_SEEN_KEY = 'last_seen_change';
 const QUESTIONS_KEY = 'planning_questions';
+const LEAVE_DAYS_KEY = 'planning_leave_days';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -26,6 +27,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
   const [pendingTasks, setPendingTasks] = useState<PendingTask[]>([]);
   const [changeLog, setChangeLog] = useState<ChangeLogEntry[]>([]);
   const [questions, setQuestions] = useState<PlanningQuestion[]>([]);
+  const [leaveDays, setLeaveDays] = useState<string[]>([]);
   const [lastSeenTimestamp, setLastSeenTimestamp] = useState<string>('');
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
   const hasBootstrappedNotificationsRef = useRef<boolean>(false);
@@ -34,11 +36,12 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [tasksData, pendingData, logData, questionsData, lastSeen] = await Promise.all([
+        const [tasksData, pendingData, logData, questionsData, leaveData, lastSeen] = await Promise.all([
           AsyncStorage.getItem(TASKS_KEY),
           AsyncStorage.getItem(PENDING_KEY),
           AsyncStorage.getItem(CHANGELOG_KEY),
           AsyncStorage.getItem(QUESTIONS_KEY),
+          AsyncStorage.getItem(LEAVE_DAYS_KEY),
           AsyncStorage.getItem(LAST_SEEN_KEY),
         ]);
 
@@ -56,6 +59,10 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
 
         if (questionsData) {
           setQuestions(JSON.parse(questionsData) as PlanningQuestion[]);
+        }
+
+        if (leaveData) {
+          setLeaveDays(JSON.parse(leaveData) as string[]);
         }
 
         if (lastSeen) {
@@ -345,6 +352,17 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     await persistQuestions(updated);
   }, [questions, persistQuestions]);
 
+  /**
+   * Toggles a paid-leave (CP) day for a given YYYY-MM-DD date key.
+   */
+  const toggleLeaveDay = useCallback(async (dateKey: string) => {
+    const updated = leaveDays.includes(dateKey)
+      ? leaveDays.filter((key) => key !== dateKey)
+      : [...leaveDays, dateKey].sort();
+    setLeaveDays(updated);
+    await AsyncStorage.setItem(LEAVE_DAYS_KEY, JSON.stringify(updated));
+  }, [leaveDays]);
+
   const getTasksForWeek = useCallback((weekKey: string): ScheduledTask[] => {
     return tasks.filter((task) => task.weekKey === weekKey);
   }, [tasks]);
@@ -376,6 +394,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     pendingTasks,
     changeLog,
     questions,
+    leaveDays,
     isLoaded,
     unseenChanges,
     latestAdminQuestion,
@@ -392,6 +411,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     answerQuestion,
     markAdminQuestionSeen,
     markViewerAnswerSeen,
+    toggleLeaveDay,
     getTasksForWeek,
     markChangesSeen,
   }), [
@@ -399,6 +419,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     pendingTasks,
     changeLog,
     questions,
+    leaveDays,
     isLoaded,
     unseenChanges,
     latestAdminQuestion,
@@ -415,6 +436,7 @@ export const [PlanningProvider, usePlanning] = createContextHook(() => {
     answerQuestion,
     markAdminQuestionSeen,
     markViewerAnswerSeen,
+    toggleLeaveDay,
     getTasksForWeek,
     markChangesSeen,
   ]);

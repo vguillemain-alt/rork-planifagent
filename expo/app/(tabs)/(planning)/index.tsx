@@ -12,7 +12,7 @@ import {
   TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronLeft, ChevronRight, Lock, Unlock, Clock, X as XIcon, Move, BellDot, ChartColumnBig, MessageSquareMore, Send, Reply, CalendarDays } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Lock, Unlock, Clock, X as XIcon, Move, BellDot, ChartColumnBig, MessageSquareMore, Send, Reply, CalendarDays } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
@@ -24,6 +24,7 @@ import {
   navigateWeek,
   getWeekNumber,
   getWeekDates,
+  getDateKey,
   END_HOUR,
   taskDurationMinutes,
 } from '@/utils/time';
@@ -32,11 +33,12 @@ import WeekGrid from '@/components/WeekGrid';
 import ChangeLogBanner from '@/components/ChangeLogBanner';
 import TaskDetailModal from '@/components/TaskDetailModal';
 
-interface SiteHoursSummary {
-  siteKey: (typeof SITE_KEYS)[number];
+interface MonthlyRow {
+  key: string;
   label: string;
   color: string;
   hours: number;
+  children?: { key: string; label: string; color: string; hours: number }[];
 }
 
 export default function PlanningScreen() {
@@ -61,6 +63,8 @@ export default function PlanningScreen() {
     answerQuestion,
     markAdminQuestionSeen,
     markViewerAnswerSeen,
+    leaveDays,
+    toggleLeaveDay,
   } = usePlanning();
   const [weekKey, setWeekKey] = useState<string>(getCurrentWeekKey());
   const [selectedPending, setSelectedPending] = useState<PendingTask | null>(null);
@@ -75,6 +79,7 @@ export default function PlanningScreen() {
   const [showAdminQuestionModal, setShowAdminQuestionModal] = useState<boolean>(false);
   const [adminAnswerText, setAdminAnswerText] = useState<string>('');
   const [showViewerAnswerModal, setShowViewerAnswerModal] = useState<boolean>(false);
+  const [altoExpanded, setAltoExpanded] = useState<boolean>(false);
 
   const weekNumber = getWeekNumber(weekKey);
   const dates = useMemo(() => getWeekDates(weekKey), [weekKey]);
@@ -110,7 +115,7 @@ export default function PlanningScreen() {
     return firstDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
   }, [firstDate]);
 
-  const monthlyHoursBySite = useMemo<SiteHoursSummary[]>(() => {
+  const monthlyRows = useMemo<MonthlyRow[]>(() => {
     const month = firstDate.getMonth();
     const year = firstDate.getFullYear();
     const totals = SITE_KEYS.reduce<Record<string, number>>((accumulator, key) => {
@@ -127,15 +132,35 @@ export default function PlanningScreen() {
       if (taskDate.getMonth() !== month || taskDate.getFullYear() !== year) {
         continue;
       }
-      totals[task.site] += taskDurationMinutes(task) / 60;
+      totals[task.site] = (totals[task.site] ?? 0) + taskDurationMinutes(task) / 60;
     }
 
-    return SITE_KEYS.map((siteKey) => ({
-      siteKey,
-      label: SITES[siteKey].label,
-      color: SITES[siteKey].color,
-      hours: totals[siteKey] ?? 0,
-    }));
+    const rows: MonthlyRow[] = [];
+    for (const siteKey of SITE_KEYS) {
+      if (siteKey === 'ALTO_AGENCE') {
+        continue;
+      }
+      if (siteKey === 'ALTO_DEPOT') {
+        rows.push({
+          key: 'ALTO',
+          label: 'ALTO',
+          color: SITES.ALTO_DEPOT.color,
+          hours: (totals.ALTO_DEPOT ?? 0) + (totals.ALTO_AGENCE ?? 0),
+          children: [
+            { key: 'ALTO_DEPOT', label: SITES.ALTO_DEPOT.label, color: SITES.ALTO_DEPOT.color, hours: totals.ALTO_DEPOT ?? 0 },
+            { key: 'ALTO_AGENCE', label: SITES.ALTO_AGENCE.label, color: SITES.ALTO_AGENCE.color, hours: totals.ALTO_AGENCE ?? 0 },
+          ],
+        });
+        continue;
+      }
+      rows.push({
+        key: siteKey,
+        label: SITES[siteKey].label,
+        color: SITES[siteKey].color,
+        hours: totals[siteKey] ?? 0,
+      });
+    }
+    return rows;
   }, [allTasks, firstDate]);
 
   const handlePrevWeek = useCallback(() => {
@@ -186,6 +211,12 @@ export default function PlanningScreen() {
   }, [isAdmin]);
 
   const handleSlotPress = useCallback((dayIndex: number, startHour: number, startMinute: number) => {
+    const dayDate = dates[dayIndex];
+    if (dayDate && leaveDays.includes(getDateKey(dayDate))) {
+      Alert.alert('Jour de congé (CP)', 'Impossible d\u2019ajouter une mission sur un jour de congé.');
+      return;
+    }
+
     if (movingTask) {
       const startMinutes = startHour * 60 + startMinute;
       void moveTask(movingTask.id, weekKey, dayIndex, startMinutes);
@@ -226,7 +257,33 @@ export default function PlanningScreen() {
         },
       });
     }
-  }, [movingTask, selectedPending, isAdmin, weekKey, schedulePendingTask, moveTask, router]);
+  }, [movingTask, selectedPending, isAdmin, weekKey, dates, leaveDays, schedulePendingTask, moveTask, router]);
+
+  const handleToggleLeaveDay = useCallback((dateKey: string) => {
+    const dayDate = dates.find((date) => getDateKey(date) === dateKey);
+    const dayLabel = dayDate
+      ? dayDate.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })
+      : dateKey;
+    const isLeave = leaveDays.includes(dateKey);
+
+    Alert.alert(
+      isLeave ? 'Retirer le jour de congé' : 'Jour de congé (CP)',
+      isLeave
+        ? `Rendre le ${dayLabel} à nouveau planifiable ?`
+        : `Marquer le ${dayLabel} comme congé payé (CP) ? Les missions ne pourront plus y être ajoutées.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: isLeave ? 'Retirer' : 'Confirmer',
+          style: isLeave ? 'default' : 'destructive',
+          onPress: () => {
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            void toggleLeaveDay(dateKey);
+          },
+        },
+      ]
+    );
+  }, [dates, leaveDays, toggleLeaveDay]);
 
   const handleTaskPress = useCallback((task: ScheduledTask, dayDate: Date) => {
     if (movingTask) {
@@ -446,11 +503,35 @@ export default function PlanningScreen() {
             </View>
           </View>
           <View style={styles.monthSummaryGrid}>
-            {monthlyHoursBySite.map((item) => (
-              <View key={item.siteKey} style={styles.monthSummaryItem}>
-                <View style={[styles.monthSummaryDot, { backgroundColor: item.color }]} />
-                <Text style={styles.monthSummaryItemLabel} numberOfLines={1}>{item.label}</Text>
-                <Text style={styles.monthSummaryItemValue}>{item.hours.toFixed(1).replace('.0', '')}h</Text>
+            {monthlyRows.map((row) => (
+              <View key={row.key} style={styles.monthSummaryRowWrap}>
+                <Pressable
+                  testID={`monthly-row-${row.key}`}
+                  onPress={row.children ? () => setAltoExpanded((previous) => !previous) : undefined}
+                  style={styles.monthSummaryItem}
+                >
+                  <View style={styles.monthSummaryItemTop}>
+                    <View style={[styles.monthSummaryDot, { backgroundColor: row.color }]} />
+                    <Text style={styles.monthSummaryItemLabel} numberOfLines={1}>{row.label}</Text>
+                    {row.children ? (
+                      altoExpanded ? (
+                        <ChevronUp size={12} color={Colors.textMuted} />
+                      ) : (
+                        <ChevronDown size={12} color={Colors.textMuted} />
+                      )
+                    ) : null}
+                  </View>
+                  <Text style={styles.monthSummaryItemValue}>{row.hours.toFixed(1).replace('.0', '')}h</Text>
+                </Pressable>
+                {row.children && altoExpanded
+                  ? row.children.map((child) => (
+                      <View key={child.key} style={styles.monthSummarySubItem}>
+                        <View style={[styles.monthSummaryDot, { backgroundColor: child.color, width: 7, height: 7 }]} />
+                        <Text style={styles.monthSummaryItemLabel} numberOfLines={1}>{child.label}</Text>
+                        <Text style={styles.monthSummarySubValue}>{child.hours.toFixed(1).replace('.0', '')}h</Text>
+                      </View>
+                    ))
+                  : null}
               </View>
             ))}
           </View>
@@ -499,6 +580,8 @@ export default function PlanningScreen() {
         tasks={tasks}
         placingTask={selectedPending}
         movingTaskId={movingTask?.id ?? null}
+        leaveDays={leaveDays}
+        onToggleLeaveDay={isAdmin ? handleToggleLeaveDay : undefined}
         onTaskPress={handleTaskPress}
         onTaskLongPress={handleTaskLongPress}
         onSlotPress={handleSlotPress}
@@ -886,13 +969,37 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap' as const,
     gap: 10,
   },
-  monthSummaryItem: {
+  monthSummaryRowWrap: {
     minWidth: '30%',
     flexGrow: 1,
+    gap: 6,
+  },
+  monthSummaryItem: {
     backgroundColor: Colors.surfaceAlt,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  monthSummaryItemTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  monthSummarySubItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginLeft: 10,
+  },
+  monthSummarySubValue: {
+    marginLeft: 'auto' as const,
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: Colors.text,
   },
   monthSummaryDot: {
     width: 10,
